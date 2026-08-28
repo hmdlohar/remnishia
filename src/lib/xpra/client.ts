@@ -189,9 +189,23 @@ export class XpraClient {
     }
   }
 
+  sendDesktopSize(width: number, height: number, dpi = 96) {
+    if (!this.connected) return
+    const screenSizes = this.getScreenSizes(width, height, dpi)
+    this.send(['desktop_size', Math.round(width), Math.round(height), screenSizes])
+  }
+
+  private getScreenSizes(w: number, h: number, dpi = 96) {
+    const wmm = Math.round((w * 25.4) / dpi)
+    const hmm = Math.round((h * 25.4) / dpi)
+    const monitor = ['Canvas', 0, 0, w, h, wmm, hmm]
+    const screen = ['HTML', w, h, wmm, hmm, [monitor], 0, 0, w, h]
+    return [screen]
+  }
+
   // extra caps only sent once authentication succeeded
   private makeHello(opts: ConnectOptions) {
-    const [w, h] = opts.desktopSize ?? [1280, 720]
+    const [w, h] = opts.desktopSize ?? [1200, 750]
     Object.assign(this.caps, {
       auto_refresh_delay: 500,
       randr_notify: true,
@@ -219,6 +233,8 @@ export class XpraClient {
       'sound.send': false,
       desktop_size: [w, h],
       'desktop_mode_size': [w, h],
+      screen_sizes: this.getScreenSizes(w, h),
+      dpi: 96,
     })
   }
 
@@ -275,6 +291,16 @@ export class XpraClient {
     this.serverCaps = (packet[1] ?? {}) as Record<string, BencodeValue>
     this.setState('connected')
     this.events.serverHello?.(this.serverCaps)
+
+    const rootSize = this.serverCaps['actual_desktop_size'] || this.serverCaps['desktop_size']
+    if (Array.isArray(rootSize) && rootSize.length >= 2) {
+      const rw = Number(rootSize[0])
+      const rh = Number(rootSize[1])
+      if (rw > 0 && rh > 0) {
+        this.events.desktopSize?.(rw, rh)
+      }
+    }
+
     this.startPings()
   }
 

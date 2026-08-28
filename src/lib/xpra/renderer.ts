@@ -58,11 +58,18 @@ export class XpraRenderer {
   onStats?: (stats: RenderStats) => void
 
   attachCanvas(canvas: HTMLCanvasElement) {
+    if (this.canvas === canvas && this.ctx) return
     this.canvas = canvas
-    this.ctx = canvas.getContext('2d', { alpha: false, desynchronized: true })
-    this.initOffscreen()
+    this.ctx = canvas.getContext('2d', { alpha: false })
+    if (!this.offscreenCanvas) {
+      this.initOffscreen()
+    }
     if (this.width > 0 && this.height > 0) {
-      this.resize(this.width, this.height)
+      if (this.canvas.width !== this.width || this.canvas.height !== this.height) {
+        this.canvas.width = this.width
+        this.canvas.height = this.height
+      }
+      this.requestRedraw(true)
     }
   }
 
@@ -81,29 +88,49 @@ export class XpraRenderer {
 
   resize(width: number, height: number) {
     if (width <= 0 || height <= 0) return
+    if (this.width === width && this.height === height) {
+      // Dimensions did not change — do not re-assign canvas.width as that clears pixels!
+      return
+    }
+
+    const prevOffscreen = this.offscreenCanvas
+    const prevW = this.width
+    const prevH = this.height
+
     this.width = width
     this.height = height
 
     if (this.canvas) {
-      this.canvas.width = width
-      this.canvas.height = height
+      if (this.canvas.width !== width || this.canvas.height !== height) {
+        this.canvas.width = width
+        this.canvas.height = height
+      }
     }
-    if (this.offscreenCanvas) {
-      this.offscreenCanvas.width = width
-      this.offscreenCanvas.height = height
+
+    this.initOffscreen()
+
+    // Preserve buffer across resize so screen does not flash black
+    if (prevOffscreen && this.offscreenCtx && prevW > 0 && prevH > 0) {
+      try {
+        this.offscreenCtx.drawImage(prevOffscreen as CanvasImageSource, 0, 0)
+      } catch {
+        // Ignored
+      }
     }
+
+    this.requestRedraw(true)
   }
 
   private initOffscreen() {
     if (typeof OffscreenCanvas !== 'undefined') {
       this.offscreenCanvas = new OffscreenCanvas(this.width || 1, this.height || 1)
-      this.offscreenCtx = this.offscreenCanvas.getContext('2d', { alpha: false, desynchronized: true })
+      this.offscreenCtx = this.offscreenCanvas.getContext('2d', { alpha: false })
     } else if (typeof document !== 'undefined') {
       const c = document.createElement('canvas')
       c.width = this.width || 1
       c.height = this.height || 1
       this.offscreenCanvas = c
-      this.offscreenCtx = c.getContext('2d', { alpha: false, desynchronized: true })
+      this.offscreenCtx = c.getContext('2d', { alpha: false })
     }
   }
 
@@ -186,9 +213,13 @@ export class XpraRenderer {
   }
 
   private async paintItem(p: DrawPacket): Promise<void> {
-    if (!this.offscreenCtx) return
-
     const { x, y, w, h, coding, data, rowstride, options } = p
+    const requiredW = x + w
+    const requiredH = y + h
+    if (requiredW > this.width || requiredH > this.height) {
+      this.resize(Math.max(this.width, requiredW), Math.max(this.height, requiredH))
+    }
+    if (!this.offscreenCtx) return
 
     switch (coding) {
       case 'rgb32':

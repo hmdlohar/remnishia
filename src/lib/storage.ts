@@ -8,6 +8,7 @@ export interface Connection {
   username: string
   password: string
   ssl: boolean
+  resolution?: [number, number]
 }
 
 const KEY = 'rem.connections'

@@ -11,7 +11,7 @@ export interface KeyInfo {
   group: number
 }
 
-// Map common JS Key values to X11 key names
+// Map common JS Key values and punctuation to X11 key names
 const SPECIAL_KEYS: Record<string, { keyname: string; keyval: number }> = {
   Escape: { keyname: 'Escape', keyval: 0xff1b },
   Tab: { keyname: 'Tab', keyval: 0xff09 },
@@ -43,6 +43,40 @@ const SPECIAL_KEYS: Record<string, { keyname: string; keyval: number }> = {
   CapsLock: { keyname: 'Caps_Lock', keyval: 0xffe5 },
   ' ': { keyname: 'space', keyval: 0x0020 },
   Space: { keyname: 'space', keyval: 0x0020 },
+
+  // Punctuation & Symbols (Crucial for X11 server keysym recognition)
+  '.': { keyname: 'period', keyval: 0x002e },
+  ',': { keyname: 'comma', keyval: 0x002c },
+  '-': { keyname: 'minus', keyval: 0x002d },
+  '/': { keyname: 'slash', keyval: 0x002f },
+  ':': { keyname: 'colon', keyval: 0x003a },
+  ';': { keyname: 'semicolon', keyval: 0x003b },
+  '<': { keyname: 'less', keyval: 0x003c },
+  '=': { keyname: 'equal', keyval: 0x003d },
+  '>': { keyname: 'greater', keyval: 0x003e },
+  '?': { keyname: 'question', keyval: 0x003f },
+  '@': { keyname: 'at', keyval: 0x0040 },
+  '[': { keyname: 'bracketleft', keyval: 0x005b },
+  '\\': { keyname: 'backslash', keyval: 0x005c },
+  ']': { keyname: 'bracketright', keyval: 0x005d },
+  '^': { keyname: 'asciicircum', keyval: 0x005e },
+  '_': { keyname: 'underscore', keyval: 0x005f },
+  '`': { keyname: 'grave', keyval: 0x0060 },
+  '{': { keyname: 'braceleft', keyval: 0x007b },
+  '|': { keyname: 'bar', keyval: 0x007c },
+  '}': { keyname: 'braceright', keyval: 0x007d },
+  '~': { keyname: 'asciitilde', keyval: 0x007e },
+  '!': { keyname: 'exclam', keyval: 0x0021 },
+  '"': { keyname: 'quotedbl', keyval: 0x0022 },
+  '#': { keyname: 'numbersign', keyval: 0x0023 },
+  '$': { keyname: 'dollar', keyval: 0x0024 },
+  '%': { keyname: 'percent', keyval: 0x0025 },
+  '&': { keyname: 'ampersand', keyval: 0x0026 },
+  "'": { keyname: 'apostrophe', keyval: 0x0027 },
+  '(': { keyname: 'parenleft', keyval: 0x0028 },
+  ')': { keyname: 'parenright', keyval: 0x0029 },
+  '*': { keyname: 'asterisk', keyval: 0x002a },
+  '+': { keyname: 'plus', keyval: 0x002b },
 }
 
 // Function keys F1 - F12
@@ -54,7 +88,7 @@ export function translateKeyEvent(e: KeyboardEvent | { key: string; code?: strin
   const rawKey = e.key
   const code = ('code' in e && e.code) ? e.code : ''
 
-  if (SPECIAL_KEYS[code]) {
+  if (code && SPECIAL_KEYS[code]) {
     const s = SPECIAL_KEYS[code]
     return {
       keyname: s.keyname,
@@ -70,13 +104,13 @@ export function translateKeyEvent(e: KeyboardEvent | { key: string; code?: strin
     return {
       keyname: s.keyname,
       keyval: s.keyval,
-      str: rawKey === ' ' ? ' ' : '',
+      str: rawKey,
       keycode: 0,
       group: 0,
     }
   }
 
-  // Printable single characters
+  // Printable single characters (letters, numbers)
   if (rawKey.length === 1) {
     const codePoint = rawKey.codePointAt(0) ?? 0
     return {

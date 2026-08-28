@@ -7,6 +7,7 @@
   import type { MacroItem } from '../lib/macros'
   import { connections } from '../lib/storage'
   import { navigate } from '../lib/router'
+  import { subscribePwa, promptInstall } from '../lib/pwa'
   import VirtualKeyboard from '../components/VirtualKeyboard.svelte'
   import LandscapeControls from '../components/LandscapeControls.svelte'
   import ShortcutBar from '../components/ShortcutBar.svelte'
@@ -22,6 +23,8 @@
   let log = $state<{ name: string; size: number }[]>([])
   let showDebug = $state(false)
   let showKbd = $state(false)
+  let showSettings = $state(false)
+  let installable = $state(false)
   let isLandscape = $state(false)
   let forceLandscape = $state(false)
   let isFullscreen = $state(false)
@@ -196,23 +199,22 @@
     const prev = activePointers.get(e.pointerId)
     activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
 
-    // Two-finger gesture: Pinch zoom AND Pan viewport cleanly
+    // Two-finger gesture: Pinch zoom OR mouse wheel scroll
     if (activePointers.size === 2) {
       const twoState = getTwoFingerState()
       if (twoState) {
-        // 1. Pinch zoom if distance changed
-        if (initialPinchDist > 10 && Math.abs(twoState.dist - initialPinchDist) > 8) {
+        // 1. Pinch zoom if distance changed noticeably
+        if (initialPinchDist > 10 && Math.abs(twoState.dist - initialPinchDist) > 12) {
           const factor = twoState.dist / initialPinchDist
           zoomLevel = Math.max(1.0, Math.min(4.0, Math.round(initialZoom * factor * 100) / 100))
           isZoomFit = zoomLevel === 1.0
         }
-
-        // 2. Pan viewport with 2-finger drag
-        if (prevTwoFingerMid && zoomLevel > 1.0) {
-          const dMidX = twoState.mid.x - prevTwoFingerMid.x
+        // 2. Two-finger vertical swipe triggers mouse wheel scroll
+        else if (prevTwoFingerMid) {
           const dMidY = twoState.mid.y - prevTwoFingerMid.y
-          panX += dMidX / zoomLevel
-          panY += dMidY / zoomLevel
+          if (Math.abs(dMidY) > 8) {
+            sendScroll(dMidY < 0)
+          }
         }
         prevTwoFingerMid = twoState.mid
       }
@@ -225,7 +227,7 @@
       const btns = e.buttons ? [e.buttons & 1 ? 1 : e.buttons & 2 ? 3 : e.buttons & 4 ? 2 : 1] : []
       client.sendPointerPosition(x, y, [], btns)
     } else {
-      // Trackpad Mode (Single finger = STRICTLY move desktop cursor)
+      // Trackpad Mode (Single finger = move desktop cursor)
       if (activePointers.size === 1 && prev) {
         const dx = e.clientX - prev.x
         const dy = e.clientY - prev.y
@@ -240,6 +242,51 @@
         const newX = Math.max(0, Math.min(desktopRes[0] - 1, Math.round(cursorPos[0] + dx * sensitivity)))
         const newY = Math.max(0, Math.min(desktopRes[1] - 1, Math.round(cursorPos[1] + dy * sensitivity)))
         cursorPos = [newX, newY]
+
+        // Deadzone Edge Panning: Viewport stays 100% STATIC until cursor reaches outer edges
+        if (zoomLevel > 1.0 && viewportEl && canvasEl) {
+          const cRect = canvasEl.getBoundingClientRect()
+          const vRect = viewportEl.getBoundingClientRect()
+
+          // Horizontal deadzone panning
+          if (cRect.width > vRect.width + 4) {
+            const maxPanX = ((cRect.width - vRect.width) / 2) / zoomLevel
+            const curScreenX = cRect.left - vRect.left + (newX / (desktopRes[0] || 1)) * cRect.width
+            const leftDeadzone = vRect.width * 0.12
+            const rightDeadzone = vRect.width * 0.88
+
+            if (curScreenX < leftDeadzone) {
+              const push = (leftDeadzone - curScreenX) / zoomLevel
+              panX = Math.min(maxPanX, panX + push)
+            } else if (curScreenX > rightDeadzone) {
+              const push = (curScreenX - rightDeadzone) / zoomLevel
+              panX = Math.max(-maxPanX, panX - push)
+            }
+          } else {
+            panX = 0
+          }
+
+          // Vertical deadzone panning
+          if (cRect.height > vRect.height + 4) {
+            const maxPanY = ((cRect.height - vRect.height) / 2) / zoomLevel
+            const curScreenY = cRect.top - vRect.top + (newY / (desktopRes[1] || 1)) * cRect.height
+            const topDeadzone = vRect.height * 0.12
+            const bottomDeadzone = vRect.height * 0.88
+
+            if (curScreenY < topDeadzone) {
+              const push = (topDeadzone - curScreenY) / zoomLevel
+              panY = Math.min(maxPanY, panY + push)
+            } else if (curScreenY > bottomDeadzone) {
+              const push = (curScreenY - bottomDeadzone) / zoomLevel
+              panY = Math.max(-maxPanY, panY - push)
+            }
+          } else {
+            panY = 0
+          }
+        } else {
+          panX = 0
+          panY = 0
+        }
 
         const btns = isDragLocked || isMouseDown ? [1] : []
         client.sendPointerPosition(newX, newY, [], btns)
@@ -288,6 +335,14 @@
     setTimeout(() => {
       client?.sendButtonAction(btn, false, x, y)
     }, 40)
+  }
+
+  function sendScroll(up: boolean) {
+    if (!client || status !== 'connected') return
+    const btn = up ? 4 : 5
+    const [x, y] = cursorPos
+    client.sendButtonAction(btn, true, x, y)
+    client.sendButtonAction(btn, false, x, y)
   }
 
   function toggleDragLock() {
@@ -394,10 +449,29 @@
     client.sendKeyAction(info.keyname, false, mods, info.keyval, info.str, info.keycode)
   }
 
+  function changeResolution(w: number, h: number) {
+    if (!client || status !== 'connected') return
+    desktopRes = [w, h]
+    client.sendDesktopSize(w, h)
+    renderer?.resize(w, h)
+    cursorPos = [Math.round(w / 2), Math.round(h / 2)]
+  }
+
+  function matchViewportResolution() {
+    if (!viewportEl || !client || status !== 'connected') return
+    const w = Math.max(640, Math.round(viewportEl.clientWidth * (window.devicePixelRatio || 1)))
+    const h = Math.max(480, Math.round(viewportEl.clientHeight * (window.devicePixelRatio || 1)))
+    changeResolution(w, h)
+  }
+
   onMount(() => {
     if (!conn) {
       navigate('#/')
       return
+    }
+
+    if (conn.resolution) {
+      desktopRes = conn.resolution
     }
 
     checkOrientation()
@@ -445,6 +519,11 @@
     }
     client.events.draw = (drawPacket, done) => {
       drawCount++
+      const reqW = drawPacket.x + drawPacket.w
+      const reqH = drawPacket.y + drawPacket.h
+      if (reqW > desktopRes[0] || reqH > desktopRes[1]) {
+        desktopRes = [Math.max(desktopRes[0], reqW), Math.max(desktopRes[1], reqH)]
+      }
       renderer?.queueDraw(drawPacket, done)
     }
     client.events.packet = (name, packet) => {
@@ -464,7 +543,12 @@
     window.addEventListener('keydown', handleWindowKeyDown)
     window.addEventListener('keyup', handleWindowKeyUp)
 
+    const unsubPwa = subscribePwa((can) => {
+      installable = can
+    })
+
     return () => {
+      unsubPwa()
       document.removeEventListener('fullscreenchange', onFullscreenChange)
       window.removeEventListener('resize', checkOrientation)
       window.removeEventListener('keydown', handleWindowKeyDown)
@@ -477,7 +561,6 @@
   $effect(() => {
     if (canvasEl && renderer) {
       renderer.attachCanvas(canvasEl)
-      renderer.resize(desktopRes[0], desktopRes[1])
     }
   })
 
@@ -488,49 +571,22 @@
 
 <main class="session {isLandscape ? 'landscape' : 'portrait'} {hideTopBar ? 'immersive' : ''}">
   {#if !hideTopBar}
-    <header>
+    <header class="clean-header">
       <button class="icon" aria-label="Back" onclick={() => navigate('#/')}>‹</button>
       <div class="title">
         <strong>{conn?.name ?? '…'}</strong>
         <span class="muted mono">{conn ? `${conn.ssl ? 'wss' : 'ws'}://${conn.host}:${conn.port}` : ''}</span>
       </div>
 
-      <!-- Quick Zoom Strip -->
-      <div class="zoom-strip">
-        <button class="zoom-btn" onclick={handleZoomOut} title="Zoom Out">−</button>
-        <button class="zoom-btn mode-btn {isZoomFit ? 'fit' : 'zoomed'}" onclick={handleZoomFitToggle}>
-          {isZoomFit ? 'Fit' : `${Math.round(zoomLevel * 100)}%`}
-        </button>
-        <button class="zoom-btn" onclick={handleZoomIn} title="Zoom In">+</button>
-      </div>
-
-      <!-- Force Landscape / Rotate Screen Button -->
-      <button
-        class="toggle-btn {forceLandscape ? 'active' : ''}"
-        onclick={toggleForceLandscape}
-        title="Toggle Landscape / Rotate"
-      >
-        🔄 {isLandscape ? 'Portrait' : 'Landscape'}
-      </button>
-
-      <button
-        class="toggle-btn mode-btn {mouseMode === 'trackpad' ? 'active' : ''}"
-        onclick={() => (mouseMode = mouseMode === 'trackpad' ? 'direct' : 'trackpad')}
-        title="Toggle Mouse Mode"
-      >
-        {mouseMode === 'trackpad' ? '🖱️ Track' : '👆 Touch'}
-      </button>
-      <button class="toggle-btn" onclick={toggleFullscreen} title="Toggle Fullscreen">
+      <button class="header-btn" onclick={toggleFullscreen} title="Toggle Fullscreen">
         {isFullscreen ? '⛶ Off' : '⛶'}
       </button>
-      <button class="toggle-btn" onclick={() => (hideTopBar = true)} title="Hide Topbar">
-        ▲
-      </button>
-      <button class="toggle-btn {showKbd ? 'active' : ''}" onclick={() => (showKbd = !showKbd)} title="Toggle Keyboard">
-        ⌨
-      </button>
-      <button class="toggle-btn {showDebug ? 'active' : ''}" onclick={() => (showDebug = !showDebug)}>
-        Stats
+      <button
+        class="header-btn {showSettings ? 'active' : ''}"
+        onclick={() => (showSettings = !showSettings)}
+        title="Settings"
+      >
+        ⚙️
       </button>
       <span class="badge {badge}">{status}</span>
     </header>
@@ -545,25 +601,8 @@
     <!-- Floating restore bar in immersive mode -->
     <div class="floating-topbar-pill">
       <button class="pill-btn" onclick={() => (hideTopBar = false)}>▼ Show Bar</button>
-      <button class="pill-btn {forceLandscape ? 'active' : ''}" onclick={toggleForceLandscape}>
-        🔄 {isLandscape ? 'Port' : 'Land'}
-      </button>
-      <button class="pill-btn" onclick={handleZoomOut}>−</button>
-      <button class="pill-btn" onclick={handleZoomFitToggle}>{isZoomFit ? 'Fit' : `${Math.round(zoomLevel * 100)}%`}</button>
-      <button class="pill-btn" onclick={handleZoomIn}>+</button>
-      <button
-        class="pill-btn {mouseMode === 'trackpad' ? 'active' : ''}"
-        onclick={() => (mouseMode = mouseMode === 'trackpad' ? 'direct' : 'trackpad')}
-      >
-        {mouseMode === 'trackpad' ? '🖱️ Track' : '👆 Touch'}
-      </button>
-      <button class="pill-btn {isDragLocked ? 'drag-active' : ''}" onclick={toggleDragLock}>
-        {isDragLocked ? '🔒 Drag' : '✋ Drag'}
-      </button>
-      <button class="pill-btn" onclick={() => sendClick(1)}>Left</button>
-      <button class="pill-btn" onclick={() => sendClick(3)}>Right</button>
       <button class="pill-btn" onclick={toggleFullscreen}>{isFullscreen ? '⛶ Exit' : '⛶'}</button>
-      <button class="pill-btn {showKbd ? 'active' : ''}" onclick={() => (showKbd = !showKbd)}>⌨</button>
+      <button class="pill-btn" onclick={() => (showSettings = true)}>⚙️</button>
     </div>
   {/if}
 
@@ -669,15 +708,19 @@
       {/if}
     </section>
 
-    <!-- Quick Mouse & Zoom Bar for Portrait Mode -->
+    <!-- Quick Mouse & Scroll Actions Bar for Portrait Mode -->
     {#if mouseMode === 'trackpad'}
       <div class="trackpad-actions-bar">
         <button class="tbtn {isDragLocked ? 'active' : ''}" onclick={toggleDragLock}>
           {isDragLocked ? '🔒 Hold Drag' : '✋ Drag'}
         </button>
-        <button class="tbtn" onclick={() => sendClick(1)}>Left Click</button>
-        <button class="tbtn" onclick={() => sendClick(2)}>Mid</button>
-        <button class="tbtn" onclick={() => sendClick(3)}>Right Click</button>
+        <button class="tbtn" onclick={() => sendClick(1)}>Left</button>
+        <button class="tbtn" onclick={() => sendClick(3)}>Right</button>
+        <button class="tbtn {showKbd ? 'active' : ''}" onclick={() => (showKbd = !showKbd)} title="Toggle Keyboard">
+          ⌨ Kbd
+        </button>
+        <button class="tbtn scroll-btn" onclick={() => sendScroll(true)} title="Scroll Up">▲ Scroll</button>
+        <button class="tbtn scroll-btn" onclick={() => sendScroll(false)} title="Scroll Down">▼ Scroll</button>
       </div>
     {/if}
 
@@ -689,6 +732,142 @@
         />
       </section>
     {/if}
+  {/if}
+
+  <!-- Settings & Display Modal -->
+  {#if showSettings}
+    <div
+      class="scrim"
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      onclick={(e) => e.target === e.currentTarget && (showSettings = false)}
+      onkeydown={(e) => e.key === 'Escape' && (showSettings = false)}
+    >
+      <div class="sheet settings-sheet">
+        <div class="sheet-header">
+          <h2>Session Settings</h2>
+          <button class="icon close-btn" aria-label="Close" onclick={() => (showSettings = false)}>✕</button>
+        </div>
+
+        <div class="setting-section">
+          <h3>Display & Layout</h3>
+          <div class="btn-group">
+            <button
+              class="setting-btn {forceLandscape ? 'active' : ''}"
+              onclick={toggleForceLandscape}
+            >
+              🔄 {isLandscape ? 'Switch to Portrait' : 'Force Landscape'}
+            </button>
+            <button
+              class="setting-btn"
+              onclick={() => {
+                hideTopBar = true
+                showSettings = false
+              }}
+            >
+              ▲ Hide Bars (Immersive)
+            </button>
+          </div>
+
+          <div class="zoom-controls-row">
+            <span class="muted">Zoom Level:</span>
+            <div class="zoom-group">
+              <button class="setting-btn" onclick={handleZoomOut}>−</button>
+              <button class="setting-btn {isZoomFit ? 'active' : ''}" onclick={handleZoomFitToggle}>
+                {isZoomFit ? 'Fit (100%)' : `${Math.round(zoomLevel * 100)}%`}
+              </button>
+              <button class="setting-btn" onclick={handleZoomIn}>+</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="setting-section">
+          <h3>Display Resolution (Dynamic)</h3>
+          <div class="btn-group">
+            <button
+              class="setting-btn {desktopRes[0] === 1200 && desktopRes[1] === 750 ? 'active' : ''}"
+              onclick={() => changeResolution(1200, 750)}
+            >
+              1200 × 750
+            </button>
+            <button
+              class="setting-btn {desktopRes[0] === 1280 && desktopRes[1] === 720 ? 'active' : ''}"
+              onclick={() => changeResolution(1280, 720)}
+            >
+              1280 × 720
+            </button>
+            <button
+              class="setting-btn {desktopRes[0] === 1920 && desktopRes[1] === 1080 ? 'active' : ''}"
+              onclick={() => changeResolution(1920, 1080)}
+            >
+              1920 × 1080
+            </button>
+          </div>
+          <button
+            class="setting-btn"
+            style="margin-top: 4px;"
+            onclick={matchViewportResolution}
+          >
+            📱 Auto Match Viewport
+          </button>
+        </div>
+
+        <div class="setting-section">
+          <h3>Input Mode</h3>
+          <div class="btn-group">
+            <button
+              class="setting-btn {mouseMode === 'trackpad' ? 'active' : ''}"
+              onclick={() => (mouseMode = 'trackpad')}
+            >
+              🖱️ Trackpad (Relative)
+            </button>
+            <button
+              class="setting-btn {mouseMode === 'direct' ? 'active' : ''}"
+              onclick={() => (mouseMode = 'direct')}
+            >
+              👆 Direct Touch (Absolute)
+            </button>
+          </div>
+        </div>
+
+        <div class="setting-section">
+          <h3>Diagnostics & Stats</h3>
+          <div class="btn-group">
+            <button
+              class="setting-btn {showDebug ? 'active' : ''}"
+              onclick={() => (showDebug = !showDebug)}
+            >
+              {showDebug ? 'Hide Live Stats' : 'Show Live Stats Overlay'}
+            </button>
+          </div>
+          <div class="info-grid">
+            <div><span class="muted">FPS:</span> <strong>{renderStats.fps}</strong></div>
+            <div><span class="muted">RTT:</span> <strong>{rtt === null ? '—' : `${rtt} ms`}</strong></div>
+            <div><span class="muted">Resolution:</span> <strong>{desktopRes[0]}×{desktopRes[1]}</strong></div>
+            <div><span class="muted">Display:</span> <strong>{serverInfo.display || ':0'}</strong></div>
+          </div>
+        </div>
+
+        {#if installable}
+          <div class="setting-section">
+            <h3>PWA App</h3>
+            <button class="setting-btn" style="background:#1a2332;border-color:#2b6cb0;color:#90cdf4" onclick={promptInstall}>
+              📲 Install rem App to Home Screen
+            </button>
+          </div>
+        {/if}
+
+        <div class="sheet-actions">
+          <button type="button" class="btn danger-btn" onclick={() => navigate('#/')}>
+            Disconnect
+          </button>
+          <button type="button" class="btn primary-btn" onclick={() => (showSettings = false)}>
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
   {/if}
 
   {#if showDebug && !hideTopBar}
@@ -743,10 +922,10 @@
     gap: 0;
     max-width: 100%;
   }
-  header {
+  header.clean-header {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
     flex-shrink: 0;
   }
   .title {
@@ -766,38 +945,17 @@
     height: 32px;
     font-size: 18px;
     padding: 0;
-  }
-  .zoom-strip {
-    display: flex;
-    gap: 2px;
-    background: #161c26;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 1px 2px;
-  }
-  .zoom-btn {
-    height: 24px;
-    padding: 0 6px;
-    font-size: 11px;
     background: transparent;
     border: none;
     color: var(--text);
     display: flex;
     align-items: center;
     justify-content: center;
+    cursor: pointer;
   }
-  .zoom-btn.mode-btn {
-    font-family: var(--mono);
-    font-size: 10px;
-    min-width: 34px;
-  }
-  .zoom-btn:active {
-    background: #2b6cb0;
-    border-radius: 4px;
-  }
-  .toggle-btn {
-    font-size: 11px;
-    padding: 2px 6px;
+  .header-btn {
+    font-size: 13px;
+    padding: 0 8px;
     height: 28px;
     background: #1c222d;
     border: 1px solid var(--border);
@@ -806,12 +964,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    white-space: nowrap;
   }
-  .toggle-btn.mode-btn {
-    font-weight: 500;
-  }
-  .toggle-btn.active {
+  .header-btn.active {
     border-color: var(--accent);
     color: var(--accent);
     background: #232c3b;
@@ -823,32 +977,23 @@
     transform: translateX(-50%);
     z-index: 30;
     display: flex;
-    gap: 3px;
+    gap: 4px;
     background: rgba(17, 20, 26, 0.88);
     backdrop-filter: blur(6px);
     border: 1px solid var(--border);
     border-radius: 20px;
-    padding: 3px 6px;
+    padding: 3px 8px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
   }
   .pill-btn {
     font-size: 11px;
-    padding: 2px 7px;
+    padding: 2px 8px;
     height: 24px;
     background: #1c222d;
     border: 1px solid #2d3748;
     border-radius: 12px;
     color: var(--text);
     white-space: nowrap;
-  }
-  .pill-btn.active {
-    background: #2b6cb0;
-    color: #fff;
-  }
-  .pill-btn.drag-active {
-    background: #9b2c2c;
-    border-color: #fc8181;
-    color: #fff;
   }
   .detail {
     margin: 0;
@@ -894,7 +1039,6 @@
     width: 100%;
     height: 100%;
     transform-origin: center center;
-    transition: transform 0.05s ease-out;
   }
   .canvas-relative-container {
     position: relative;
@@ -927,18 +1071,21 @@
   }
   .trackpad-actions-bar {
     display: flex;
-    gap: 4px;
+    gap: 3px;
     flex-shrink: 0;
   }
   .tbtn {
     flex: 1;
-    height: 30px;
+    height: 32px;
     padding: 0 4px;
     font-size: 11px;
     background: #1c222d;
     border: 1px solid var(--border);
     border-radius: 6px;
     color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   .tbtn:active {
     background: #3182ce;
@@ -947,6 +1094,15 @@
   .tbtn.active {
     background: #9b2c2c;
     border-color: #fc8181;
+    color: #fff;
+  }
+  .tbtn.scroll-btn {
+    background: #1a2332;
+    border-color: #2b394e;
+    color: #cbd5e0;
+  }
+  .tbtn.scroll-btn:active {
+    background: #2b6cb0;
     color: #fff;
   }
   .overlay {
@@ -1006,5 +1162,129 @@
   .keyboard-container {
     flex-shrink: 0;
     width: 100%;
+  }
+
+  /* Scrim and Settings Modal Sheet */
+  .scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(4px);
+    z-index: 100;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+  }
+  .settings-sheet {
+    background: #151921;
+    border: 1px solid var(--border);
+    border-radius: 16px 16px 0 0;
+    width: 100%;
+    max-width: 500px;
+    max-height: 85vh;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.8);
+  }
+  .sheet-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .sheet-header h2 {
+    margin: 0;
+    font-size: 16px;
+  }
+  .close-btn {
+    width: 28px;
+    height: 28px;
+    font-size: 14px;
+  }
+  .setting-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .setting-section h3 {
+    margin: 0;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--fg-muted);
+  }
+  .btn-group {
+    display: flex;
+    gap: 8px;
+  }
+  .setting-btn {
+    flex: 1;
+    height: 36px;
+    font-size: 12px;
+    font-weight: 500;
+    background: #1c222d;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+  .setting-btn.active {
+    background: #2b6cb0;
+    border-color: #63b3ed;
+    color: #fff;
+  }
+  .zoom-controls-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #1c222d;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .zoom-group {
+    display: flex;
+    gap: 4px;
+  }
+  .zoom-group .setting-btn {
+    height: 28px;
+    padding: 0 10px;
+    min-width: 32px;
+  }
+  .info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    background: #1c222d;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .sheet-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .danger-btn {
+    background: #742a2a;
+    color: #fff;
+    border: 1px solid #9b2c2c;
+    flex: 1;
+    height: 38px;
+    border-radius: 8px;
+  }
+  .primary-btn {
+    background: #2b6cb0;
+    color: #fff;
+    border: 1px solid #3182ce;
+    flex: 2;
+    height: 38px;
+    border-radius: 8px;
   }
 </style>

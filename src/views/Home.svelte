@@ -1,24 +1,95 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import { connections, type Connection } from '../lib/storage'
   import { navigate } from '../lib/router'
+  import { subscribePwa, promptInstall, isStandalone } from '../lib/pwa'
 
   let editing = $state<Connection | 'new' | null>(null)
-  let form = $state({ name: '', host: '', port: 10000, username: '', password: '', ssl: false })
+  let form = $state({
+    name: '',
+    host: '',
+    port: 10000,
+    username: '',
+    password: '',
+    ssl: false,
+    resWidth: 1200,
+    resHeight: 750,
+  })
+  let canAutoInstall = $state(false)
+  let isAppStandalone = $state(false)
+  let showInstallGuide = $state(false)
+
+  onMount(() => {
+    isAppStandalone = isStandalone()
+    return subscribePwa((can) => {
+      canAutoInstall = can
+    })
+  })
+
+  async function handleInstallClick() {
+    if (canAutoInstall) {
+      const installed = await promptInstall()
+      if (installed) return
+    }
+    showInstallGuide = true
+  }
 
   function startNew() {
-    form = { name: '', host: '', port: 10000, username: '', password: '', ssl: false }
+    form = {
+      name: '',
+      host: '',
+      port: 10000,
+      username: '',
+      password: '',
+      ssl: false,
+      resWidth: 1200,
+      resHeight: 750,
+    }
     editing = 'new'
   }
 
   function startEdit(c: Connection) {
-    form = { name: c.name, host: c.host, port: c.port, username: c.username, password: c.password, ssl: c.ssl }
+    const [rw, rh] = c.resolution ?? [1200, 750]
+    form = {
+      name: c.name,
+      host: c.host,
+      port: c.port,
+      username: c.username,
+      password: c.password,
+      ssl: c.ssl,
+      resWidth: rw,
+      resHeight: rh,
+    }
     editing = c
+  }
+
+  function setPreset(w: number, h: number) {
+    form.resWidth = w
+    form.resHeight = h
   }
 
   function save() {
     if (!form.name.trim() || !form.host.trim()) return
-    if (editing === 'new') connections.add({ ...form, name: form.name.trim(), host: form.host.trim() })
-    else if (editing) connections.updateConn(editing.id, { ...form })
+    const resolution: [number, number] = [
+      Math.max(640, form.resWidth || 1200),
+      Math.max(480, form.resHeight || 750),
+    ]
+
+    const data = {
+      name: form.name.trim(),
+      host: form.host.trim(),
+      port: form.port,
+      username: form.username,
+      password: form.password,
+      ssl: form.ssl,
+      resolution,
+    }
+
+    if (editing === 'new') {
+      connections.add(data)
+    } else if (editing) {
+      connections.updateConn(editing.id, data)
+    }
     editing = null
   }
 
@@ -29,9 +100,29 @@
 
 <main class="home">
   <header>
-    <h1>Remote</h1>
-    <button class="primary" onclick={startNew}>+ Add</button>
+    <div class="brand">
+      <img src="/favicon.svg" alt="rem logo" class="brand-icon" />
+      <h1>Remote</h1>
+    </div>
+    <div class="header-actions">
+      {#if !isAppStandalone}
+        <button class="icon-btn install-header-btn" onclick={handleInstallClick} title="Install PWA">
+          📲 Install
+        </button>
+      {/if}
+      <button class="primary" onclick={startNew}>+ Add</button>
+    </div>
   </header>
+
+  {#if !isAppStandalone}
+    <div class="install-banner">
+      <div class="install-text">
+        <strong>Install rem App</strong>
+        <span class="muted">Add to home screen for fullscreen remote desktop without browser bars</span>
+      </div>
+      <button class="install-btn" onclick={handleInstallClick}>Install 📲</button>
+    </div>
+  {/if}
 
   {#if $connections.length === 0 && !editing}
     <p class="muted empty">No connections yet. Add your xpra server to get started.</p>
@@ -41,7 +132,10 @@
     {#each $connections as c (c.id)}
       <li>
         <button class="row" onclick={() => navigate(`#/c/${c.id}`)}>
-          <span class="name">{c.name}</span>
+          <div class="name-row">
+            <span class="name">{c.name}</span>
+            <span class="res-badge">{c.resolution ? `${c.resolution[0]}×${c.resolution[1]}` : '1200×750'}</span>
+          </div>
           <span class="muted mono">{c.ssl ? 'wss' : 'ws'}://{c.host}:{c.port}</span>
         </button>
         <button class="icon" aria-label="Edit" onclick={() => startEdit(c)}>✎</button>
@@ -50,6 +144,7 @@
     {/each}
   </ul>
 
+  <!-- Edit / Add Connection Modal -->
   {#if editing}
     <div
       class="scrim"
@@ -78,11 +173,73 @@
         </div>
         <label>Username <input bind:value={form.username} autocomplete="off" /></label>
         <label>Password <input type="password" bind:value={form.password} autocomplete="off" /></label>
+
+        <!-- Remote Resolution Configuration -->
+        <div class="res-config-box">
+          <span class="res-label">Remote Resolution</span>
+          <div class="pair">
+            <label>Width <input type="number" bind:value={form.resWidth} min="640" max="3840" placeholder="1200" /></label>
+            <label>Height <input type="number" bind:value={form.resHeight} min="480" max="2160" placeholder="750" /></label>
+          </div>
+          <div class="preset-row">
+            <button type="button" class="preset-btn {form.resWidth === 1200 && form.resHeight === 750 ? 'active' : ''}" onclick={() => setPreset(1200, 750)}>
+              1200 × 750
+            </button>
+            <button type="button" class="preset-btn {form.resWidth === 1280 && form.resHeight === 720 ? 'active' : ''}" onclick={() => setPreset(1280, 720)}>
+              1280 × 720
+            </button>
+            <button type="button" class="preset-btn {form.resWidth === 1920 && form.resHeight === 1080 ? 'active' : ''}" onclick={() => setPreset(1920, 1080)}>
+              1920 × 1080
+            </button>
+          </div>
+        </div>
+
         <div class="actions">
           <button type="button" onclick={() => (editing = null)}>Cancel</button>
           <button type="submit" class="primary">Save</button>
         </div>
       </form>
+    </div>
+  {/if}
+
+  <!-- PWA Install Guide Modal -->
+  {#if showInstallGuide}
+    <div
+      class="scrim"
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      onclick={(e) => e.target === e.currentTarget && (showInstallGuide = false)}
+      onkeydown={(e) => e.key === 'Escape' && (showInstallGuide = false)}
+    >
+      <div class="sheet guide-sheet">
+        <h2>How to Install rem</h2>
+        <p class="muted">Install <strong>rem</strong> on your phone for a full-screen, native-app experience:</p>
+
+        <div class="guide-box">
+          <strong>📱 Chrome / Brave / Edge (Android):</strong>
+          <ol>
+            <li>Tap the browser menu button <strong>⋮</strong> (top or bottom right).</li>
+            <li>Select <strong>"Add to Home screen"</strong> or <strong>"Install app"</strong>.</li>
+            <li>Tap <strong>Add / Install</strong> to confirm.</li>
+          </ol>
+        </div>
+
+        <div class="guide-box">
+          <strong>🍏 Safari (iOS / iPhone):</strong>
+          <ol>
+            <li>Tap the <strong>Share</strong> icon (square with arrow <strong>⬆</strong>).</li>
+            <li>Scroll down and tap <strong>"Add to Home Screen"</strong>.</li>
+            <li>Tap <strong>Add</strong> in the top right corner.</li>
+          </ol>
+        </div>
+
+        <div class="actions">
+          <button type="button" class="primary" onclick={() => (showInstallGuide = false)}>
+            Got it
+          </button>
+        </div>
+      </div>
     </div>
   {/if}
 </main>
@@ -97,87 +254,244 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 12px;
+    margin-bottom: 14px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .brand-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+  }
+  h1 {
+    font-size: 20px;
+    margin: 0;
+  }
+  .header-actions {
+    display: flex;
+    gap: 8px;
+  }
+  .install-header-btn {
+    background: #1c2536;
+    color: #90cdf4;
+    border: 1px solid #2b6cb0;
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .install-banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #151d2a;
+    border: 1px solid #2b6cb0;
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    gap: 12px;
+  }
+  .install-text {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .install-text strong {
+    font-size: 13px;
+    color: #90cdf4;
+  }
+  .install-text .muted {
+    font-size: 11px;
+    line-height: 1.3;
+  }
+  .install-btn {
+    background: #2b6cb0;
+    color: #fff;
+    border: 1px solid #63b3ed;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
   }
   .empty {
-    margin-top: 48px;
     text-align: center;
+    padding: 32px 0;
   }
   ul {
     list-style: none;
-    margin: 0;
     padding: 0;
+    margin: 0;
     display: flex;
     flex-direction: column;
     gap: 8px;
   }
   li {
     display: flex;
-    gap: 6px;
-    align-items: stretch;
+    align-items: center;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 4px;
+    gap: 4px;
   }
   .row {
     flex: 1;
+    background: transparent;
+    border: none;
     text-align: left;
     display: flex;
     flex-direction: column;
     gap: 2px;
-    padding: 12px 14px;
+    padding: 8px 10px;
+    cursor: pointer;
+    color: inherit;
+    min-width: 0;
+  }
+  .name-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
   .name {
-    font-weight: 600;
+    font-weight: 500;
+  }
+  .res-badge {
+    font-size: 10px;
+    background: #1e2634;
+    border: 1px solid #2d3748;
+    color: #90cdf4;
+    border-radius: 4px;
+    padding: 1px 4px;
+    font-family: var(--mono);
   }
   .icon {
-    width: 44px;
+    width: 36px;
+    height: 36px;
     padding: 0;
+    background: transparent;
+    border: none;
+    color: var(--fg-muted);
+    font-size: 16px;
+    cursor: pointer;
+    border-radius: 6px;
+  }
+  .icon:hover {
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .icon.danger:hover {
+    color: var(--err);
   }
   .scrim {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(4px);
     display: flex;
     align-items: flex-end;
     justify-content: center;
-    z-index: 10;
+    z-index: 100;
   }
   .sheet {
-    background: var(--panel);
+    background: #151921;
     border: 1px solid var(--border);
     border-radius: 16px 16px 0 0;
-    padding: 20px 16px calc(20px + env(safe-area-inset-bottom));
     width: 100%;
     max-width: 560px;
+    padding: 20px 16px;
     display: flex;
     flex-direction: column;
     gap: 12px;
-    max-height: 90vh;
-    overflow: auto;
+    box-sizing: border-box;
+    box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.8);
+  }
+  .guide-sheet {
+    max-height: 85vh;
+    overflow-y: auto;
+  }
+  .guide-box {
+    background: #1a2332;
+    border: 1px solid #2d3b52;
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 12px;
+  }
+  .guide-box ol {
+    margin: 6px 0 0 16px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: #cbd5e0;
+  }
+  .res-config-box {
+    background: #1a222f;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .res-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--fg-muted);
+  }
+  .preset-row {
+    display: flex;
+    gap: 6px;
+  }
+  .preset-btn {
+    flex: 1;
+    font-size: 11px;
+    padding: 4px 6px;
+    background: #151a24;
+    border: 1px solid #2d3748;
+    color: var(--text);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .preset-btn.active {
+    background: #2b6cb0;
+    border-color: #63b3ed;
+    color: #fff;
+  }
+  .sheet h2 {
+    margin: 0;
+    font-size: 16px;
   }
   label {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    font-size: 14px;
-    color: var(--muted);
+    font-size: 12px;
+    color: var(--fg-muted);
   }
   .pair {
-    display: flex;
-    gap: 12px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
     align-items: end;
   }
-  .pair label:first-child {
-    flex: 1;
-  }
-  .check {
+  label.check {
     flex-direction: row;
     align-items: center;
     gap: 8px;
-    white-space: nowrap;
+    height: 36px;
+    cursor: pointer;
+    color: var(--text);
   }
   .actions {
     display: flex;
     justify-content: flex-end;
     gap: 8px;
-    margin-top: 4px;
+    margin-top: 8px;
   }
 </style>

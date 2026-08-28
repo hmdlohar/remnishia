@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Background Gradient spanning full bleed for maskable safe area -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0e131f"/>
+      <stop offset="50%" stop-color="#141c2c"/>
+      <stop offset="100%" stop-color="#080b12"/>
+    </linearGradient>
+
+    <linearGradient id="neonGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f2fe"/>
+      <stop offset="50%" stop-color="#4facfe"/>
+      <stop offset="100%" stop-color="#7e22ce"/>
+    </linearGradient>
+
+    <linearGradient id="screenGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1b2438"/>
+      <stop offset="100%" stop-color="#0d121c"/>
+    </linearGradient>
+
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Full Bleed Background for Android Maskable Safe Zone -->
+  <rect width="512" height="512" fill="url(#bgGrad)"/>
+
+  <!-- Scaled down content (80% safe zone) -->
+  <g transform="translate(51.2, 51.2) scale(0.8)">
+    <!-- Outer Monitor / Remote Frame -->
+    <rect x="76" y="86" width="360" height="250" rx="28" fill="url(#screenGrad)" stroke="#2d3748" stroke-width="4"/>
+    <rect x="92" y="102" width="328" height="218" rx="18" fill="#070a10"/>
+
+    <!-- Monitor Stand Base -->
+    <path d="M216 336 L206 396 L176 406 C168 408 168 420 176 420 L336 420 C344 420 344 408 336 406 L306 396 L296 336 Z" fill="#1c2436" stroke="#2d3748" stroke-width="3"/>
+    <rect x="236" y="412" width="40" height="4" rx="2" fill="#00f2fe" filter="url(#glow)"/>
+
+    <!-- Window Top Bar -->
+    <rect x="92" y="102" width="328" height="30" rx="18" fill="#141b2a"/>
+    <circle cx="116" cy="117" r="5" fill="#ef4444"/>
+    <circle cx="134" cy="117" r="5" fill="#f59e0b"/>
+    <circle cx="152" cy="117" r="5" fill="#10b981"/>
+
+    <!-- Neon "rem" Emblem -->
+    <g filter="url(#glow)">
+      <path d="M150 180 L210 225 L150 270" fill="none" stroke="url(#neonGrad)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M245 270 L345 270" stroke="#00f2fe" stroke-width="18" stroke-linecap="round"/>
+      <circle cx="310" cy="180" r="16" fill="#7e22ce" opacity="0.8"/>
+      <circle cx="340" cy="205" r="10" fill="#4facfe"/>
+    </g>
+  </g>
+</svg>

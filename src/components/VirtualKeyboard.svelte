@@ -94,11 +94,12 @@
     ['z', 'x', 'c', 'v', 'b', 'n', 'm'],
   ]
 
+  // Symbols on left, Numpad on right
   const symRows = [
-    ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
-    ['!', '@', '#', '$', '%', '^', '&', '*', '(', ')'],
-    ['-', '_', '=', '+', '[', ']', '{', '}', '\\', '|'],
-    [';', ':', "'", '"', ',', '.', '<', '>', '/', '?'],
+    { syms: ['!', '@', '#', '$', '%'], numpad: ['7', '8', '9', '/'] },
+    { syms: ['^', '&', '*', '(', ')'], numpad: ['4', '5', '6', '*'] },
+    { syms: ['[', ']', '{', '}', '\\'], numpad: ['1', '2', '3', '-'] },
+    { syms: ["'", '"', '<', '>', '?'], numpad: ['0', '.', '=', '+'] },
   ]
 
   const fnRows = [
@@ -176,24 +177,45 @@
     <div class="row space-row">
       <button class="btn key sym-char" onclick={() => pressKey('/')}>/</button>
       <button class="btn key sym-char" onclick={() => pressKey('-')}>-</button>
+      <button class="btn key comma-btn" onclick={() => pressKey(',')}>,</button>
       <button class="btn space-btn" onclick={() => pressKey(' ')}>Space</button>
-      <button class="btn key sym-char" onclick={() => pressKey('.')}>.</button>
+      <button class="btn key dot-btn" onclick={() => pressKey('.')}>.</button>
       <button class="btn return-btn" onclick={() => pressKey('Enter')}>↵ Return</button>
     </div>
   {/if}
 
-  <!-- Sym Layer -->
+  <!-- Sym & Numpad Split Layer (Symbols Left, Numpad Right) -->
   {#if layer === 'sym'}
     {#each symRows as row}
-      <div class="row">
-        {#each row as sym}
-          <button class="btn key" onclick={() => pressKey(sym)}>{sym}</button>
-        {/each}
+      <div class="row sym-split-row">
+        <!-- Left Side: Symbols Block -->
+        <div class="sym-block">
+          {#each row.syms as sym}
+            <button class="btn key sym-key" onclick={() => pressKey(sym)}>{sym}</button>
+          {/each}
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Right Side: Numpad Block -->
+        <div class="numpad-block">
+          {#each row.numpad as num}
+            <button
+              class="btn key numpad-key {['+', '-', '*', '/', '='].includes(num) ? 'num-op' : ''}"
+              onclick={() => pressKey(num)}
+            >
+              {num}
+            </button>
+          {/each}
+        </div>
       </div>
     {/each}
+
     <div class="row space-row">
+      <button class="btn key sym-char" onclick={() => pressKey(';')}>;</button>
+      <button class="btn key sym-char" onclick={() => pressKey(':')}>:</button>
       <button class="btn space-btn" onclick={() => pressKey(' ')}>Space</button>
-      <button class="btn act" onclick={() => pressKey('Backspace')}>⌫ Backspace</button>
+      <button class="btn act" onclick={() => pressKey('Backspace')}>⌫</button>
       <button class="btn return-btn" onclick={() => pressKey('Enter')}>↵ Return</button>
     </div>
   {/if}
@@ -300,11 +322,18 @@
   .btn.sym-char {
     flex: 0.8;
   }
+  .btn.comma-btn,
+  .btn.dot-btn {
+    flex: 1.1;
+    font-size: 16px;
+    font-weight: 600;
+    background: #202836;
+  }
   .btn.fn-key {
     font-size: 12px;
   }
   .space-btn {
-    flex: 4;
+    flex: 3.5;
   }
   .return-btn {
     flex: 2.2;
@@ -318,5 +347,44 @@
     pointer-events: none;
     width: 0;
     height: 0;
+  }
+
+  /* Split Symbols on Left, Numpad on Right */
+  .sym-split-row {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+  .sym-block {
+    display: flex;
+    flex: 1.1;
+    gap: 3px;
+  }
+  .sym-key {
+    background: #18202c;
+    color: #90cdf4;
+    font-size: 13px;
+  }
+  .divider {
+    width: 1px;
+    height: 32px;
+    background: #2d3748;
+    margin: 0 1px;
+  }
+  .numpad-block {
+    display: flex;
+    flex: 1;
+    gap: 3px;
+  }
+  .numpad-key {
+    background: #202938;
+    color: #f7fafc;
+    font-weight: 600;
+    font-size: 15px;
+  }
+  .numpad-key.num-op {
+    background: #1a2230;
+    color: #cbd5e0;
+    font-size: 14px;
   }
 </style>
