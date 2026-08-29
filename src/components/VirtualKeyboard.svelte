@@ -96,11 +96,11 @@
     ['z', 'x', 'c', 'v', 'b', 'n', 'm'],
   ]
 
-  // Symbols on left, Numpad on right
+  // Symbols on left, Mobile phone sequence Numpad (123 -> 456 -> 789 -> 0) on right
   const symRows = [
-    { syms: ['!', '@', '#', '$', '%'], numpad: ['7', '8', '9', '/'] },
+    { syms: ['!', '@', '#', '$', '%'], numpad: ['1', '2', '3', '/'] },
     { syms: ['^', '&', '*', '(', ')'], numpad: ['4', '5', '6', '*'] },
-    { syms: ['[', ']', '{', '}', '\\'], numpad: ['1', '2', '3', '-'] },
+    { syms: ['[', ']', '{', '}', '\\'], numpad: ['7', '8', '9', '-'] },
     { syms: ["'", '"', '<', '>', '?'], numpad: ['0', '.', '=', '+'] },
   ]
 </script>

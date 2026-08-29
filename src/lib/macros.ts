@@ -20,6 +20,7 @@ export const DEFAULT_MACROS: MacroItem[] = [
   { id: 'nav-pgdn', label: 'PgDn', mode: 'nav', type: 'key', key: 'PageDown' },
   { id: 'nav-home', label: 'Home', mode: 'nav', type: 'key', key: 'Home' },
   { id: 'nav-end', label: 'End', mode: 'nav', type: 'key', key: 'End' },
+  { id: 'nav-d', label: '^D', mode: 'nav', type: 'combo', key: 'd', modifiers: ['control'] },
   { id: 'nav-alttab', label: 'Alt+Tab', mode: 'nav', type: 'combo', key: 'Tab', modifiers: ['alt'] },
   { id: 'nav-altf4', label: 'Alt+F4', mode: 'nav', type: 'combo', key: 'F4', modifiers: ['alt'] },
 

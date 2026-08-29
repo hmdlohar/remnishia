@@ -9,7 +9,8 @@
   import { navigate } from '../lib/router'
   import { subscribePwa, promptInstall } from '../lib/pwa'
   import VirtualKeyboard from '../components/VirtualKeyboard.svelte'
-  import LandscapeControls from '../components/LandscapeControls.svelte'
+  import LandscapeLeft from '../components/LandscapeLeft.svelte'
+  import LandscapeRight from '../components/LandscapeRight.svelte'
   import ShortcutBar from '../components/ShortcutBar.svelte'
   import VoiceInputModal from '../components/VoiceInputModal.svelte'
 
@@ -31,6 +32,12 @@
   let forceLandscape = $state(false)
   let isFullscreen = $state(false)
   let hideTopBar = $state(false)
+  let isTouchLocked = $state(false)
+  let requestingRes = $state<string | null>(null)
+
+  function toggleTouchLock() {
+    isTouchLocked = !isTouchLocked
+  }
 
   // Mouse Input Mode: 'trackpad' (relative dragging cursor) vs 'direct' (absolute touch)
   let mouseMode = $state<'trackpad' | 'direct'>('trackpad')
@@ -38,6 +45,13 @@
   let isMouseDown = $state(false)
   let isDragLocked = $state(false)
   let activeCursor = $state<CursorInfo | null>(null)
+
+  // Shared Landscape Split-Keyboard Modifier and Symbol States
+  let lsSymbols = $state(false)
+  let lsCtrlState = $state<'off' | 'latched' | 'locked'>('off')
+  let lsAltState = $state<'off' | 'latched' | 'locked'>('off')
+  let lsShiftState = $state<'off' | 'latched' | 'locked'>('off')
+  let lsMetaState = $state<'off' | 'latched' | 'locked'>('off')
 
   let renderStats = $state<RenderStats>({
     fps: 0,
@@ -457,16 +471,18 @@
 
   function changeResolution(w: number, h: number) {
     if (!client || status !== 'connected') return
-    desktopRes = [w, h]
+    requestingRes = `${w}×${h}`
     client.sendDesktopSize(w, h)
-    renderer?.resize(w, h)
-    cursorPos = [Math.round(w / 2), Math.round(h / 2)]
+    setTimeout(() => {
+      if (requestingRes === `${w}×${h}`) requestingRes = null
+    }, 3000)
   }
 
   function matchViewportResolution() {
     if (!viewportEl || !client || status !== 'connected') return
-    const w = Math.max(640, Math.round(viewportEl.clientWidth * (window.devicePixelRatio || 1)))
-    const h = Math.max(480, Math.round(viewportEl.clientHeight * (window.devicePixelRatio || 1)))
+    const rect = viewportEl.getBoundingClientRect()
+    const w = Math.max(640, Math.round(rect.width * (window.devicePixelRatio || 1)))
+    const h = Math.max(480, Math.round(rect.height * (window.devicePixelRatio || 1)))
     changeResolution(w, h)
   }
 
@@ -512,6 +528,7 @@
     client.events.ping = (ms) => (rtt = ms)
     client.events.desktopSize = (w, h) => {
       if (w > 0 && h > 0) {
+        requestingRes = null
         desktopRes = [w, h]
         renderer?.resize(w, h)
         cursorPos = [Math.round(w / 2), Math.round(h / 2)]
@@ -529,6 +546,7 @@
       const reqH = drawPacket.y + drawPacket.h
       if (reqW > desktopRes[0] || reqH > desktopRes[1]) {
         desktopRes = [Math.max(desktopRes[0], reqW), Math.max(desktopRes[1], reqH)]
+        renderer?.resize(desktopRes[0], desktopRes[1])
       }
       renderer?.queueDraw(drawPacket, done)
     }
@@ -579,7 +597,7 @@
 </script>
 
 <main class="session {isLandscape ? 'landscape' : 'portrait'} {hideTopBar ? 'immersive' : ''}">
-  {#if !hideTopBar}
+  {#if !isLandscape && !hideTopBar}
     <header class="clean-header">
       <button class="icon" aria-label="Back" onclick={() => navigate('#/')}>‹</button>
       <div class="title">
@@ -589,6 +607,13 @@
 
       <button class="header-btn" onclick={toggleFullscreen} title="Toggle Fullscreen">
         {isFullscreen ? '⛶ Off' : '⛶'}
+      </button>
+      <button
+        class="header-btn {isTouchLocked ? 'active' : ''}"
+        onclick={toggleTouchLock}
+        title="Touch / Pocket Lock"
+      >
+        🔒
       </button>
       <button
         class="header-btn {showSettings ? 'active' : ''}"
@@ -606,27 +631,33 @@
 
     <!-- Shortcut Bar with Nav/Dev/Edit Modes -->
     <ShortcutBar onExecute={handleExecuteMacro} />
-  {:else}
-    <!-- Floating restore bar in immersive mode -->
+  {:else if !isLandscape}
+    <!-- Floating restore bar in immersive mode (Portrait only) -->
     <div class="floating-topbar-pill">
       <button class="pill-btn" onclick={() => (hideTopBar = false)}>▼ Show Bar</button>
       <button class="pill-btn" onclick={toggleFullscreen}>{isFullscreen ? '⛶ Exit' : '⛶'}</button>
+      <button class="pill-btn" onclick={toggleTouchLock}>🔒 Lock</button>
       <button class="pill-btn" onclick={() => (showSettings = true)}>⚙️</button>
     </div>
   {/if}
 
   {#if isLandscape}
-    <!-- Landscape 3-Column Split Layout -->
+    <!-- Landscape 3-Column Split Layout: Left Keyboard | Center Screen (100% Height) | Right Keyboard -->
     <div class="landscape-split">
-      <LandscapeControls
+      <LandscapeLeft
         onKeyPress={handleVirtualKeyPress}
         onMouseButton={handleLandscapeMouseButton}
-        onToggleKbd={() => (showKbd = !showKbd)}
-        onZoomFit={handleZoomFitToggle}
+        onToggleDragLock={toggleDragLock}
+        {isDragLocked}
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
-        {isZoomFit}
-        {showKbd}
+        onBack={() => navigate('#/')}
+        onToggleLock={toggleTouchLock}
+        bind:isSymbols={lsSymbols}
+        bind:ctrlState={lsCtrlState}
+        bind:altState={lsAltState}
+        bind:shiftState={lsShiftState}
+        bind:metaState={lsMetaState}
       />
 
       <section bind:this={viewportEl} class="viewport-container landscape-vp">
@@ -677,18 +708,24 @@
           </div>
         {/if}
       </section>
-    </div>
 
-    <!-- Landscape Keyboard Drawer -->
-    {#if showKbd}
-      <div class="landscape-kbd-drawer">
-        <VirtualKeyboard
-          onKeyPress={handleVirtualKeyPress}
-          onKeyAction={handleVirtualKeyAction}
-          onVoiceInput={() => (showVoiceModal = true)}
-        />
-      </div>
-    {/if}
+      <LandscapeRight
+        onKeyPress={handleVirtualKeyPress}
+        onMouseButton={handleLandscapeMouseButton}
+        onZoomFit={handleZoomFitToggle}
+        {isZoomFit}
+        onVoiceInput={() => (showVoiceModal = true)}
+        onToggleFullscreen={toggleFullscreen}
+        {isFullscreen}
+        onOpenSettings={() => (showSettings = true)}
+        onToggleLock={toggleTouchLock}
+        bind:isSymbols={lsSymbols}
+        bind:ctrlState={lsCtrlState}
+        bind:altState={lsAltState}
+        bind:shiftState={lsShiftState}
+        bind:metaState={lsMetaState}
+      />
+    </div>
   {:else}
     <!-- Portrait Layout with Zoom & Pan wrapper -->
     <section bind:this={viewportEl} class="viewport-container portrait-vp">
@@ -816,11 +853,57 @@
               <button class="setting-btn" onclick={handleZoomIn}>+</button>
             </div>
           </div>
+
+          <div class="btn-group" style="margin-top: 4px;">
+            <button
+              class="setting-btn {isZoomFit ? 'active' : ''}"
+              onclick={() => { isZoomFit = true; zoomLevel = 1.0; panX = 0; panY = 0; }}
+            >
+              Fit Screen
+            </button>
+            <button
+              class="setting-btn {!isZoomFit && zoomLevel === 1.35 ? 'active' : ''}"
+              onclick={() => { isZoomFit = false; zoomLevel = 1.35; panX = 0; panY = 0; }}
+            >
+              Fill Height
+            </button>
+            <button
+              class="setting-btn {!isZoomFit && zoomLevel === 1.5 ? 'active' : ''}"
+              onclick={() => { isZoomFit = false; zoomLevel = 1.5; }}
+            >
+              1.5× Zoom
+            </button>
+          </div>
         </div>
 
         <div class="setting-section">
-          <h3>Display Resolution (Dynamic)</h3>
-          <div class="btn-group">
+          <h3>Display Resolution</h3>
+          <div class="tip-box">
+            🖥️ Host Screen: <strong>{desktopRes[0]} × {desktopRes[1]}</strong>
+            {#if requestingRes}
+              <span class="muted" style="display:block;margin-top:2px;color:#90cdf4;font-weight:600;">
+                ⏳ Requesting {requestingRes} from server…
+              </span>
+            {:else if serverInfo.shadow}
+              <span class="muted" style="display:block;margin-top:2px;font-size:11px;">
+                (Shadow session mirrors your physical PC monitor :0. Hardware monitors cannot be resized remotely.)
+              </span>
+            {/if}
+          </div>
+
+          <div class="btn-group" style="margin-top: 6px; flex-wrap: wrap;">
+            <button
+              class="setting-btn {desktopRes[0] === 1280 && desktopRes[1] === 1024 ? 'active' : ''}"
+              onclick={() => changeResolution(1280, 1024)}
+            >
+              1280 × 1024 (5:4)
+            </button>
+            <button
+              class="setting-btn {desktopRes[0] === 1024 && desktopRes[1] === 768 ? 'active' : ''}"
+              onclick={() => changeResolution(1024, 768)}
+            >
+              1024 × 768 (4:3)
+            </button>
             <button
               class="setting-btn {desktopRes[0] === 1200 && desktopRes[1] === 750 ? 'active' : ''}"
               onclick={() => changeResolution(1200, 750)}
@@ -845,7 +928,7 @@
             style="margin-top: 4px;"
             onclick={matchViewportResolution}
           >
-            📱 Auto Match Viewport
+            📱 Request Viewport Resolution
           </button>
         </div>
 
@@ -939,6 +1022,30 @@
     onSend={handleVoiceSend}
     onClose={() => (showVoiceModal = false)}
   />
+
+  {#if isTouchLocked}
+    <!-- Touch / Pocket Lock Overlay (blocks all touches to the underlying session) -->
+    <div
+      class="touch-lock-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Touch Screen Locked"
+      tabindex="-1"
+    >
+      <div class="lock-card">
+        <div class="lock-icon">🔒</div>
+        <div class="lock-title">Touch Screen Locked</div>
+        <div class="lock-sub">Pocket protection active • All touches blocked</div>
+        <button
+          type="button"
+          class="unlock-btn"
+          onclick={() => (isTouchLocked = false)}
+        >
+          🔓 Tap to Unlock
+        </button>
+      </div>
+    </div>
+  {/if}
 </main>
 
 <style>
@@ -947,17 +1054,22 @@
     flex-direction: column;
     height: 100%;
     margin: 0 auto;
-    padding: 6px;
-    gap: 6px;
+    padding: 4px;
+    gap: 4px;
     box-sizing: border-box;
     overflow: hidden;
   }
   .session.portrait {
     max-width: 600px;
+    padding: 4px;
+    gap: 4px;
   }
   .session.landscape {
     max-width: 100%;
+    width: 100vw;
     height: 100vh;
+    padding: 0;
+    gap: 0;
   }
   .session.immersive {
     padding: 0;
@@ -994,43 +1106,65 @@
     align-items: center;
     justify-content: center;
     cursor: pointer;
+    border-radius: 6px;
   }
   .header-btn {
-    font-size: 13px;
-    padding: 0 8px;
-    height: 28px;
-    background: #1c222d;
-    border: 1px solid var(--border);
-    color: var(--fg-muted);
+    padding: 4px 8px;
+    font-size: 12px;
     border-radius: 6px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
+    gap: 4px;
   }
   .header-btn.active {
-    border-color: var(--accent);
-    color: var(--accent);
-    background: #232c3b;
+    background: #2b6cb0;
+    border-color: #63b3ed;
+    color: #fff;
+  }
+  .badge {
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex-shrink: 0;
+  }
+  .badge.connected {
+    background: rgba(56, 161, 105, 0.15);
+    color: var(--ok);
+  }
+  .badge.connecting,
+  .badge.authenticating {
+    background: rgba(214, 158, 46, 0.15);
+    color: var(--warn);
+  }
+  .badge.error,
+  .badge.closed {
+    background: rgba(229, 62, 62, 0.15);
+    color: var(--err);
   }
   .floating-topbar-pill {
     position: absolute;
     top: 6px;
     left: 50%;
     transform: translateX(-50%);
-    z-index: 30;
+    z-index: 100;
     display: flex;
     gap: 4px;
-    background: rgba(17, 20, 26, 0.88);
-    backdrop-filter: blur(6px);
-    border: 1px solid var(--border);
+    background: rgba(13, 16, 23, 0.85);
+    backdrop-filter: blur(8px);
+    padding: 3px 6px;
     border-radius: 20px;
-    padding: 3px 8px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   }
   .pill-btn {
-    font-size: 11px;
-    padding: 2px 8px;
-    height: 24px;
     background: #1c222d;
     border: 1px solid #2d3748;
     border-radius: 12px;
@@ -1050,11 +1184,15 @@
   }
   .landscape-split {
     display: flex;
+    flex-direction: row;
     flex: 1;
-    gap: 8px;
+    gap: 2px;
     align-items: stretch;
     min-height: 0;
+    width: 100vw;
+    height: 100vh;
     position: relative;
+    overflow: hidden;
   }
   .viewport-container {
     position: relative;
@@ -1271,6 +1409,14 @@
     letter-spacing: 0.5px;
     color: var(--fg-muted);
   }
+  .tip-box {
+    background: #141a24;
+    border: 1px solid #233044;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    color: #e2e8f0;
+  }
   .btn-group {
     display: flex;
     gap: 8px;
@@ -1342,5 +1488,60 @@
     flex: 2;
     height: 38px;
     border-radius: 8px;
+  }
+  .touch-lock-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    background: rgba(5, 7, 10, 0.88);
+    backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: none;
+    user-select: none;
+  }
+  .lock-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: #111622;
+    border: 1px solid #2d3748;
+    border-radius: 16px;
+    padding: 24px 32px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.7);
+    text-align: center;
+    gap: 8px;
+    max-width: 320px;
+  }
+  .lock-icon {
+    font-size: 44px;
+    filter: drop-shadow(0 2px 8px rgba(246, 224, 94, 0.4));
+  }
+  .lock-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #f7fafc;
+  }
+  .lock-sub {
+    font-size: 12px;
+    color: #a0aec0;
+    margin-bottom: 8px;
+  }
+  .unlock-btn {
+    background: #2b6cb0;
+    border: 1px solid #4299e1;
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 10px 24px;
+    border-radius: 10px;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(43, 108, 176, 0.4);
+    touch-action: manipulation;
+  }
+  .unlock-btn:active {
+    background: #2c5282;
+    transform: scale(0.98);
   }
 </style>
