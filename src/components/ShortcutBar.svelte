@@ -7,7 +7,7 @@
     onExecute: (macro: MacroItem) => void
   } = $props()
 
-  let currentMode = $state<SessionMode>('dev')
+  let currentMode = $state<SessionMode>('nav')
   let showAddModal = $state(false)
   let newLabel = $state('')
   let newType = $state<'text' | 'combo'>('text')
