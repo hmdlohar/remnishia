@@ -7,6 +7,7 @@
 import { XpraProtocol, type Packet } from './protocol'
 import { gendigest, randomBytes, OFFERED_DIGESTS } from './crypto'
 import { asStr, type BencodeValue } from './bencode'
+import { getKeyInfo } from './keycodes'
 import type { DrawPacket, DrawCallback } from './renderer'
 
 export type ClientState = 'idle' | 'connecting' | 'authenticating' | 'connected' | 'closed' | 'error'
@@ -54,6 +55,7 @@ export class XpraClient {
   serverCaps: Record<string, BencodeValue> = {}
   windows: Map<number, WindowState> = new Map()
   focusWid = 0
+  clipboardBuffer = ''
   events: Partial<XpraClientEvents> = {}
 
   get connected() {
@@ -122,10 +124,162 @@ export class XpraClient {
   }
 
   sendKeyPress(keyname: string, modifiers: string[] = [], keyval = 0, str = '') {
-    this.sendKeyAction(keyname, true, modifiers, keyval, str)
+    if (modifiers.length > 0) {
+      this.sendKeyCombo(keyname, modifiers, keyval, str)
+      return
+    }
+    const info = getKeyInfo(keyname)
+    const kn = info.keyname
+    const kv = keyval || info.keyval
+    this.sendKeyAction(kn, true, [], kv, str)
     setTimeout(() => {
-      this.sendKeyAction(keyname, false, modifiers, keyval, str)
-    }, 25)
+      this.sendKeyAction(kn, false, [], kv, str)
+    }, 35)
+  }
+
+  async sendText(text: string, pressEnter = false, delayMs = 4): Promise<void> {
+    if (!this.connected) return
+
+    for (const ch of text) {
+      if (ch === '\n' || ch === '\r') {
+        this.sendKeyAction('Return', true, [], 0xff0d, '\n')
+        await new Promise((r) => setTimeout(r, delayMs))
+        this.sendKeyAction('Return', false, [], 0xff0d, '\n')
+      } else {
+        const info = getKeyInfo(ch)
+        const isUpper = ch >= 'A' && ch <= 'Z'
+        const mods = isUpper ? ['shift'] : []
+        if (isUpper) {
+          this.sendKeyAction('Shift_L', true, mods, 0xffe1, '')
+          await new Promise((r) => setTimeout(r, 4))
+        }
+        this.sendKeyAction(info.keyname, true, mods, info.keyval, ch)
+        await new Promise((r) => setTimeout(r, delayMs))
+        this.sendKeyAction(info.keyname, false, mods, info.keyval, ch)
+        if (isUpper) {
+          await new Promise((r) => setTimeout(r, 4))
+          this.sendKeyAction('Shift_L', false, [], 0xffe1, '')
+        }
+      }
+      await new Promise((r) => setTimeout(r, delayMs))
+    }
+
+    if (pressEnter) {
+      await new Promise((r) => setTimeout(r, delayMs))
+      this.sendKeyAction('Return', true, [], 0xff0d, '\n')
+      await new Promise((r) => setTimeout(r, delayMs))
+      this.sendKeyAction('Return', false, [], 0xff0d, '\n')
+    }
+  }
+
+  sendClipboardText(text: string) {
+    if (!this.connected) return
+    this.clipboardBuffer = text
+    const claim = true
+    const greedy = true
+    const synchronous = true
+    const targets = [
+      'UTF8_STRING',
+      'text/plain',
+      'text/plain;charset=utf-8',
+      'STRING',
+      'TEXT',
+      'COMPOUND_TEXT',
+    ]
+
+    // Set CLIPBOARD
+    this.send([
+      'clipboard-token',
+      'CLIPBOARD',
+      targets,
+      'UTF8_STRING',
+      'UTF8_STRING',
+      8,
+      'bytes',
+      text,
+      claim,
+      greedy,
+      synchronous,
+    ])
+
+    // Set PRIMARY selection (for X11 terminals and editors)
+    this.send([
+      'clipboard-token',
+      'PRIMARY',
+      targets,
+      'UTF8_STRING',
+      'UTF8_STRING',
+      8,
+      'bytes',
+      text,
+      claim,
+      greedy,
+      synchronous,
+    ])
+  }
+
+  async pasteTextToRemote(text: string): Promise<void> {
+    if (!this.connected) return
+    this.sendClipboardText(text)
+    await new Promise((r) => setTimeout(r, 60))
+    // Trigger Shift+Insert (Universal Linux terminal & desktop paste)
+    this.sendKeyCombo('Insert', ['shift'])
+    // Also trigger Ctrl+V for GTK/Electron/browser apps
+    await new Promise((r) => setTimeout(r, 40))
+    this.sendKeyCombo('v', ['control'])
+  }
+
+  sendKeyCombo(keyname: string, modifiers: string[] = [], keyval = 0, str = '') {
+    if (!this.connected) return
+
+    const keyInfo = getKeyInfo(keyname)
+    const targetKeyname = keyInfo.keyname
+    const targetKeyval = keyval || keyInfo.keyval
+
+    // Expand modifier names (e.g. ['alt'] -> ['mod1', 'alt'], ['meta'] -> ['mod4', 'meta'])
+    const expandedMods: string[] = []
+    const modKeyEvents: { keyname: string; keyval: number }[] = []
+
+    for (const mod of modifiers) {
+      const m = mod.toLowerCase()
+      if (m === 'alt' || m === 'mod1') {
+        if (!expandedMods.includes('mod1')) expandedMods.push('mod1')
+        if (!expandedMods.includes('alt')) expandedMods.push('alt')
+        modKeyEvents.push({ keyname: 'Alt_L', keyval: 0xffe9 })
+      } else if (m === 'control' || m === 'ctrl') {
+        if (!expandedMods.includes('control')) expandedMods.push('control')
+        modKeyEvents.push({ keyname: 'Control_L', keyval: 0xffe3 })
+      } else if (m === 'shift') {
+        if (!expandedMods.includes('shift')) expandedMods.push('shift')
+        modKeyEvents.push({ keyname: 'Shift_L', keyval: 0xffe1 })
+      } else if (m === 'meta' || m === 'super' || m === 'mod4') {
+        if (!expandedMods.includes('mod4')) expandedMods.push('mod4')
+        if (!expandedMods.includes('meta')) expandedMods.push('meta')
+        modKeyEvents.push({ keyname: 'Meta_L', keyval: 0xffe7 })
+      }
+    }
+
+    // 1. Press modifier keys down with proper keysyms
+    for (const mk of modKeyEvents) {
+      this.sendKeyAction(mk.keyname, true, expandedMods, mk.keyval, '')
+    }
+
+    // 2. Press target key (e.g. Tab) while modifiers are held down
+    setTimeout(() => {
+      this.sendKeyAction(targetKeyname, true, expandedMods, targetKeyval, str)
+
+      // 3. Release target key
+      setTimeout(() => {
+        this.sendKeyAction(targetKeyname, false, expandedMods, targetKeyval, str)
+
+        // 4. Release modifier keys
+        setTimeout(() => {
+          for (const mk of modKeyEvents) {
+            this.sendKeyAction(mk.keyname, false, [], mk.keyval, '')
+          }
+        }, 100)
+      }, 100)
+    }, 80)
   }
 
   private setState(state: ClientState, detail?: string) {
@@ -222,7 +376,13 @@ export class XpraClient {
       'encoding.client_options': true,
       windows: true,
       keyboard: true,
-      clipboard: false,
+      xkbmap_layout: 'us',
+      xkbmap_print: '',
+      xkbmap_query: '',
+      clipboard: true,
+      'clipboard.selections': ['CLIPBOARD', 'PRIMARY'],
+      'clipboard.want_targets': true,
+      'clipboard.greedy': true,
       notifications: true,
       cursors: true,
       bell: false,
@@ -277,6 +437,12 @@ export class XpraClient {
         break
       case 'draw':
         this.onDraw(packet)
+        break
+      case 'clipboard-request':
+        this.onClipboardRequest(packet)
+        break
+      case 'clipboard-token':
+        this.onClipboardToken(packet)
         break
       case 'disconnect':
         this.stopTimers()
@@ -359,6 +525,31 @@ export class XpraClient {
     const w = typeof packet[1] === 'number' ? packet[1] : 0
     const h = typeof packet[2] === 'number' ? packet[2] : 0
     this.events.desktopSize?.(w, h)
+  }
+
+  private onClipboardRequest(packet: Packet) {
+    const requestId = packet[1]
+    const selection = asStr(packet[2]) || 'CLIPBOARD'
+    const target = packet.length > 3 ? asStr(packet[3]) : 'UTF8_STRING'
+
+    const buffer = this.clipboardBuffer || ''
+    if (!buffer) {
+      this.send(['clipboard-contents-none', requestId, selection])
+    } else {
+      this.send([
+        'clipboard-contents',
+        requestId,
+        selection,
+        target || 'UTF8_STRING',
+        8,
+        'bytes',
+        buffer,
+      ])
+    }
+  }
+
+  private onClipboardToken(_packet: Packet) {
+    // Preserve local user clipboard buffer for repeated paste actions
   }
 
   private onNewWindow(packet: Packet, overrideRedirect: boolean) {

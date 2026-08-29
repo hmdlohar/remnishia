@@ -69,6 +69,9 @@
     <button class="mode-tab {currentMode === 'edit' ? 'active' : ''}" onclick={() => (currentMode = 'edit')}>
       Edit
     </button>
+    <button class="mode-tab {currentMode === 'fn' ? 'active' : ''}" onclick={() => (currentMode = 'fn')}>
+      Fn
+    </button>
     <button class="mode-tab {currentMode === 'custom' ? 'active' : ''}" onclick={() => (currentMode = 'custom')}>
       Custom
     </button>

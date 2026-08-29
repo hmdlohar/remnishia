@@ -4,9 +4,11 @@
   let {
     onKeyPress,
     onKeyAction,
+    onVoiceInput,
   }: {
     onKeyPress: (keyname: string, modifiers: string[], keyval?: number, str?: string) => void
     onKeyAction: (keyname: string, pressed: boolean, modifiers: string[], keyval?: number, str?: string) => void
+    onVoiceInput?: () => void
   } = $props()
 
   type ModKey = 'control' | 'alt' | 'shift' | 'meta'
@@ -17,7 +19,7 @@
   let shiftState = $state<ModState>('off')
   let metaState = $state<ModState>('off')
 
-  let layer = $state<'alpha' | 'sym' | 'fn'>('alpha')
+  let layer = $state<'alpha' | 'sym'>('alpha')
   let inputBridgeEl: HTMLInputElement | null = $state(null)
 
   function activeModifiers(): string[] {
@@ -101,12 +103,6 @@
     { syms: ['[', ']', '{', '}', '\\'], numpad: ['1', '2', '3', '-'] },
     { syms: ["'", '"', '<', '>', '?'], numpad: ['0', '.', '=', '+'] },
   ]
-
-  const fnRows = [
-    ['F1', 'F2', 'F3', 'F4', 'F5', 'F6'],
-    ['F7', 'F8', 'F9', 'F10', 'F11', 'F12'],
-    ['Insert', 'Delete', 'Home', 'End', 'PageUp', 'PageDown'],
-  ]
 </script>
 
 <div class="virtual-keyboard">
@@ -122,6 +118,9 @@
     <button class="btn fn arrow" onclick={() => pressKey('ArrowDown')}>▼</button>
     <button class="btn fn arrow" onclick={() => pressKey('ArrowLeft')}>◄</button>
     <button class="btn fn arrow" onclick={() => pressKey('ArrowRight')}>►</button>
+    {#if onVoiceInput}
+      <button class="btn fn voice-btn" onclick={onVoiceInput} title="Voice Input">🎙️</button>
+    {/if}
     <button class="btn fn bridge-btn" onclick={() => inputBridgeEl?.focus()}>⌨</button>
   </div>
 
@@ -138,7 +137,7 @@
     onkeydown={handleBridgeKeyDown}
   />
 
-  <!-- Modifier Bar -->
+  <!-- Modifier Bar (4 Modifiers spanning evenly across the row) -->
   <div class="row mod-row">
     <button class="btn mod {ctrlState}" onclick={() => toggleModifier('control')}>
       Ctrl {ctrlState === 'locked' ? '🔒' : ctrlState === 'latched' ? '•' : ''}
@@ -152,12 +151,9 @@
     <button class="btn mod {metaState}" onclick={() => toggleModifier('meta')}>
       Super {metaState === 'locked' ? '🔒' : metaState === 'latched' ? '•' : ''}
     </button>
-    <button class="btn mode-switch" onclick={() => (layer = layer === 'alpha' ? 'sym' : layer === 'sym' ? 'fn' : 'alpha')}>
-      {layer === 'alpha' ? '123' : layer === 'sym' ? 'Fn' : 'ABC'}
-    </button>
   </div>
 
-  <!-- Alpha Layer -->
+  <!-- Alpha Layer (Primary ABC view) -->
   {#if layer === 'alpha'}
     {#each alphaRows as row, i}
       <div class="row">
@@ -174,7 +170,10 @@
         {/if}
       </div>
     {/each}
+
+    <!-- Bottom Space Row with ?123 Mode Switcher at Bottom-Left -->
     <div class="row space-row">
+      <button class="btn mode-switch-btn" onclick={() => (layer = 'sym')}>?123</button>
       <button class="btn key sym-char" onclick={() => pressKey('/')}>/</button>
       <button class="btn key sym-char" onclick={() => pressKey('-')}>-</button>
       <button class="btn key comma-btn" onclick={() => pressKey(',')}>,</button>
@@ -184,7 +183,7 @@
     </div>
   {/if}
 
-  <!-- Sym & Numpad Split Layer (Symbols Left, Numpad Right) -->
+  <!-- Sym & Numpad Split Layer (123 view with ABC switcher at Bottom-Left) -->
   {#if layer === 'sym'}
     {#each symRows as row}
       <div class="row sym-split-row">
@@ -211,26 +210,13 @@
       </div>
     {/each}
 
+    <!-- Bottom Row with ABC Switcher at Bottom-Left -->
     <div class="row space-row">
+      <button class="btn mode-switch-btn active" onclick={() => (layer = 'alpha')}>ABC</button>
       <button class="btn key sym-char" onclick={() => pressKey(';')}>;</button>
       <button class="btn key sym-char" onclick={() => pressKey(':')}>:</button>
       <button class="btn space-btn" onclick={() => pressKey(' ')}>Space</button>
       <button class="btn act" onclick={() => pressKey('Backspace')}>⌫</button>
-      <button class="btn return-btn" onclick={() => pressKey('Enter')}>↵ Return</button>
-    </div>
-  {/if}
-
-  <!-- Fn Layer -->
-  {#if layer === 'fn'}
-    {#each fnRows as row}
-      <div class="row">
-        {#each row as fnKey}
-          <button class="btn key fn-key" onclick={() => pressKey(fnKey)}>{fnKey}</button>
-        {/each}
-      </div>
-    {/each}
-    <div class="row space-row">
-      <button class="btn act" onclick={() => pressKey('Delete')}>Delete</button>
       <button class="btn return-btn" onclick={() => pressKey('Enter')}>↵ Return</button>
     </div>
   {/if}
@@ -309,11 +295,16 @@
     border-color: #fc8181;
     color: #fff;
   }
-  .btn.mode-switch {
+  .btn.mode-switch-btn {
+    flex: 1.3;
     background: #2d3748;
     font-weight: 600;
     font-size: 12px;
-    flex: 1.2;
+    color: #90cdf4;
+  }
+  .btn.mode-switch-btn.active {
+    background: #2b6cb0;
+    color: #fff;
   }
   .btn.act {
     flex: 1.5;
@@ -328,9 +319,6 @@
     font-size: 16px;
     font-weight: 600;
     background: #202836;
-  }
-  .btn.fn-key {
-    font-size: 12px;
   }
   .space-btn {
     flex: 3.5;

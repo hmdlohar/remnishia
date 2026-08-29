@@ -1,6 +1,6 @@
 import { writable } from 'svelte/store'
 
-export type SessionMode = 'nav' | 'dev' | 'edit' | 'custom'
+export type SessionMode = 'nav' | 'dev' | 'edit' | 'fn' | 'custom'
 
 export interface MacroItem {
   id: string
@@ -44,6 +44,22 @@ export const DEFAULT_MACROS: MacroItem[] = [
   { id: 'edit-redo', label: '^Y', mode: 'edit', type: 'combo', key: 'y', modifiers: ['control'] },
   { id: 'edit-find', label: '^F', mode: 'edit', type: 'combo', key: 'f', modifiers: ['control'] },
   { id: 'edit-delw', label: '^Bksp', mode: 'edit', type: 'combo', key: 'Backspace', modifiers: ['control'] },
+
+  // Fn Mode (Function Keys)
+  { id: 'fn-f1', label: 'F1', mode: 'fn', type: 'key', key: 'F1' },
+  { id: 'fn-f2', label: 'F2', mode: 'fn', type: 'key', key: 'F2' },
+  { id: 'fn-f3', label: 'F3', mode: 'fn', type: 'key', key: 'F3' },
+  { id: 'fn-f4', label: 'F4', mode: 'fn', type: 'key', key: 'F4' },
+  { id: 'fn-f5', label: 'F5', mode: 'fn', type: 'key', key: 'F5' },
+  { id: 'fn-f6', label: 'F6', mode: 'fn', type: 'key', key: 'F6' },
+  { id: 'fn-f7', label: 'F7', mode: 'fn', type: 'key', key: 'F7' },
+  { id: 'fn-f8', label: 'F8', mode: 'fn', type: 'key', key: 'F8' },
+  { id: 'fn-f9', label: 'F9', mode: 'fn', type: 'key', key: 'F9' },
+  { id: 'fn-f10', label: 'F10', mode: 'fn', type: 'key', key: 'F10' },
+  { id: 'fn-f11', label: 'F11', mode: 'fn', type: 'key', key: 'F11' },
+  { id: 'fn-f12', label: 'F12', mode: 'fn', type: 'key', key: 'F12' },
+  { id: 'fn-ins', label: 'Ins', mode: 'fn', type: 'key', key: 'Insert' },
+  { id: 'fn-del', label: 'Del', mode: 'fn', type: 'key', key: 'Delete' },
 ]
 
 const KEY = 'rem.custom_macros'

@@ -11,7 +11,7 @@ export interface KeyInfo {
   group: number
 }
 
-// Map common JS Key values and punctuation to X11 key names
+// Map common JS Key values and punctuation to X11 key names and keysyms
 const SPECIAL_KEYS: Record<string, { keyname: string; keyval: number }> = {
   Escape: { keyname: 'Escape', keyval: 0xff1b },
   Tab: { keyname: 'Tab', keyval: 0xff09 },
@@ -29,17 +29,27 @@ const SPECIAL_KEYS: Record<string, { keyname: string; keyval: number }> = {
   ArrowLeft: { keyname: 'Left', keyval: 0xff51 },
   ArrowRight: { keyname: 'Right', keyval: 0xff53 },
   Control: { keyname: 'Control_L', keyval: 0xffe3 },
+  Control_L: { keyname: 'Control_L', keyval: 0xffe3 },
+  Control_R: { keyname: 'Control_R', keyval: 0xffe4 },
   ControlLeft: { keyname: 'Control_L', keyval: 0xffe3 },
   ControlRight: { keyname: 'Control_R', keyval: 0xffe4 },
   Shift: { keyname: 'Shift_L', keyval: 0xffe1 },
+  Shift_L: { keyname: 'Shift_L', keyval: 0xffe1 },
+  Shift_R: { keyname: 'Shift_R', keyval: 0xffe2 },
   ShiftLeft: { keyname: 'Shift_L', keyval: 0xffe1 },
   ShiftRight: { keyname: 'Shift_R', keyval: 0xffe2 },
   Alt: { keyname: 'Alt_L', keyval: 0xffe9 },
+  Alt_L: { keyname: 'Alt_L', keyval: 0xffe9 },
+  Alt_R: { keyname: 'Alt_R', keyval: 0xffea },
   AltLeft: { keyname: 'Alt_L', keyval: 0xffe9 },
   AltRight: { keyname: 'Alt_R', keyval: 0xffea },
   Meta: { keyname: 'Meta_L', keyval: 0xffe7 },
+  Meta_L: { keyname: 'Meta_L', keyval: 0xffe7 },
+  Meta_R: { keyname: 'Meta_R', keyval: 0xffe8 },
   MetaLeft: { keyname: 'Meta_L', keyval: 0xffe7 },
   MetaRight: { keyname: 'Meta_R', keyval: 0xffe8 },
+  Super_L: { keyname: 'Super_L', keyval: 0xffeb },
+  Super_R: { keyname: 'Super_R', keyval: 0xffec },
   CapsLock: { keyname: 'Caps_Lock', keyval: 0xffe5 },
   ' ': { keyname: 'space', keyval: 0x0020 },
   Space: { keyname: 'space', keyval: 0x0020 },
@@ -82,6 +92,14 @@ const SPECIAL_KEYS: Record<string, { keyname: string; keyval: number }> = {
 // Function keys F1 - F12
 for (let i = 1; i <= 12; i++) {
   SPECIAL_KEYS[`F${i}`] = { keyname: `F${i}`, keyval: 0xffbd + i }
+}
+
+export function getKeyInfo(key: string): { keyname: string; keyval: number } {
+  if (SPECIAL_KEYS[key]) return SPECIAL_KEYS[key]
+  if (key.length === 1) {
+    return { keyname: key, keyval: key.codePointAt(0) ?? 0 }
+  }
+  return { keyname: key, keyval: 0 }
 }
 
 export function translateKeyEvent(e: KeyboardEvent | { key: string; code?: string }): KeyInfo {

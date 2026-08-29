@@ -11,6 +11,7 @@
   import VirtualKeyboard from '../components/VirtualKeyboard.svelte'
   import LandscapeControls from '../components/LandscapeControls.svelte'
   import ShortcutBar from '../components/ShortcutBar.svelte'
+  import VoiceInputModal from '../components/VoiceInputModal.svelte'
 
   let { id }: { id: string } = $props()
   let status = $state<ClientState>('idle')
@@ -24,6 +25,7 @@
   let showDebug = $state(false)
   let showKbd = $state(false)
   let showSettings = $state(false)
+  let showVoiceModal = $state(false)
   let installable = $state(false)
   let isLandscape = $state(false)
   let forceLandscape = $state(false)
@@ -388,13 +390,16 @@
     } else if (macro.type === 'combo' && macro.key) {
       client.sendKeyPress(macro.key, macro.modifiers || [])
     } else if (macro.type === 'text' && macro.text) {
-      for (const ch of macro.text) {
-        if (ch === '\n') {
-          client.sendKeyPress('Return')
-        } else {
-          client.sendKeyPress(ch)
-        }
-      }
+      client.sendText(macro.text)
+    }
+  }
+
+  function handleVoiceSend(text: string, mode: 'paste' | 'type') {
+    if (!client || status !== 'connected') return
+    if (mode === 'paste') {
+      client.pasteTextToRemote(text)
+    } else {
+      client.sendText(text, false)
     }
   }
 
@@ -665,6 +670,7 @@
         <VirtualKeyboard
           onKeyPress={handleVirtualKeyPress}
           onKeyAction={handleVirtualKeyAction}
+          onVoiceInput={() => (showVoiceModal = true)}
         />
       </div>
     {/if}
@@ -719,6 +725,9 @@
         <button class="tbtn {showKbd ? 'active' : ''}" onclick={() => (showKbd = !showKbd)} title="Toggle Keyboard">
           ⌨ Kbd
         </button>
+        <button class="tbtn voice-tbtn" onclick={() => (showVoiceModal = true)} title="Voice Input">
+          🎙️
+        </button>
         <button class="tbtn scroll-btn" onclick={() => sendScroll(true)} title="Scroll Up">▲ Scroll</button>
         <button class="tbtn scroll-btn" onclick={() => sendScroll(false)} title="Scroll Down">▼ Scroll</button>
       </div>
@@ -729,6 +738,7 @@
         <VirtualKeyboard
           onKeyPress={handleVirtualKeyPress}
           onKeyAction={handleVirtualKeyAction}
+          onVoiceInput={() => (showVoiceModal = true)}
         />
       </section>
     {/if}
@@ -897,6 +907,12 @@
       {/each}
     </section>
   {/if}
+
+  <VoiceInputModal
+    open={showVoiceModal}
+    onSend={handleVoiceSend}
+    onClose={() => (showVoiceModal = false)}
+  />
 </main>
 
 <style>
@@ -1095,6 +1111,11 @@
     background: #9b2c2c;
     border-color: #fc8181;
     color: #fff;
+  }
+  .tbtn.voice-tbtn {
+    background: #1a2433;
+    border-color: #2b6cb0;
+    color: #90cdf4;
   }
   .tbtn.scroll-btn {
     background: #1a2332;
