@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { XpraClient, type ClientState, type WindowState } from '../lib/xpra/client'
+  import { XpraClient, type ClientState, type WindowState, type CursorInfo } from '../lib/xpra/client'
   import { XpraRenderer, type RenderStats } from '../lib/xpra/renderer'
   import { asStr, type BencodeValue } from '../lib/xpra/bencode'
   import { translateKeyEvent } from '../lib/xpra/keycodes'
@@ -37,6 +37,7 @@
   let cursorPos = $state<[number, number]>([640, 360])
   let isMouseDown = $state(false)
   let isDragLocked = $state(false)
+  let activeCursor = $state<CursorInfo | null>(null)
 
   let renderStats = $state<RenderStats>({
     fps: 0,
@@ -535,6 +536,9 @@
       packetCount++
       log = [{ name: fmtPacket(packet), size: 0 }, ...log].slice(0, 40)
     }
+    client.events.cursor = (cur) => {
+      activeCursor = cur
+    }
 
     client.connect({
       host: conn.host,
@@ -634,6 +638,7 @@
             <canvas
               bind:this={canvasEl}
               class="remote-canvas"
+              style:cursor={activeCursor?.dataUrl ? `url("${activeCursor.dataUrl}") ${activeCursor.xhot} ${activeCursor.yhot}, auto` : 'default'}
               onpointerdown={handlePointerDown}
               onpointermove={handlePointerMove}
               onpointerup={handlePointerUp}
@@ -648,11 +653,21 @@
         {#if cursorScreen.visible}
           <div
             class="fixed-screen-cursor {isDragLocked ? 'dragging' : ''}"
-            style:transform="translate({cursorScreen.x}px, {cursorScreen.y}px)"
+            style:transform="translate({cursorScreen.x - (activeCursor ? activeCursor.xhot : 0)}px, {cursorScreen.y - (activeCursor ? activeCursor.yhot : 0)}px)"
           >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M3 2L19 10L11 12L9 20L3 2Z" fill="#ffffff" stroke="#000000" stroke-width="1.8" stroke-linejoin="round"/>
-            </svg>
+            {#if activeCursor?.dataUrl}
+              <img
+                src={activeCursor.dataUrl}
+                alt="cursor"
+                class="cursor-img"
+                style:width="{activeCursor.w || 24}px"
+                style:height="{activeCursor.h || 24}px"
+              />
+            {:else}
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M3 2L19 10L11 12L9 20L3 2Z" fill="#ffffff" stroke="#000000" stroke-width="1.8" stroke-linejoin="round"/>
+              </svg>
+            {/if}
           </div>
         {/if}
 
@@ -685,6 +700,7 @@
           <canvas
             bind:this={canvasEl}
             class="remote-canvas"
+            style:cursor={activeCursor?.dataUrl ? `url("${activeCursor.dataUrl}") ${activeCursor.xhot} ${activeCursor.yhot}, auto` : 'default'}
             onpointerdown={handlePointerDown}
             onpointermove={handlePointerMove}
             onpointerup={handlePointerUp}
@@ -699,11 +715,21 @@
       {#if cursorScreen.visible}
         <div
           class="fixed-screen-cursor {isDragLocked ? 'dragging' : ''}"
-          style:transform="translate({cursorScreen.x}px, {cursorScreen.y}px)"
+          style:transform="translate({cursorScreen.x - (activeCursor ? activeCursor.xhot : 0)}px, {cursorScreen.y - (activeCursor ? activeCursor.yhot : 0)}px)"
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M3 2L19 10L11 12L9 20L3 2Z" fill="#ffffff" stroke="#000000" stroke-width="1.8" stroke-linejoin="round"/>
-          </svg>
+          {#if activeCursor?.dataUrl}
+            <img
+              src={activeCursor.dataUrl}
+              alt="cursor"
+              class="cursor-img"
+              style:width="{activeCursor.w || 24}px"
+              style:height="{activeCursor.h || 24}px"
+            />
+          {:else}
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M3 2L19 10L11 12L9 20L3 2Z" fill="#ffffff" stroke="#000000" stroke-width="1.8" stroke-linejoin="round"/>
+            </svg>
+          {/if}
         </div>
       {/if}
 
@@ -1082,8 +1108,17 @@
     filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.8));
     will-change: transform;
   }
+  .cursor-img {
+    display: block;
+    pointer-events: none;
+    user-select: none;
+    image-rendering: auto;
+  }
   .fixed-screen-cursor.dragging svg path {
     fill: #4da3ff;
+  }
+  .fixed-screen-cursor.dragging .cursor-img {
+    filter: drop-shadow(0 0 4px #4da3ff);
   }
   .trackpad-actions-bar {
     display: flex;

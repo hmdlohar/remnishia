@@ -22,6 +22,14 @@ export interface WindowState {
   overrideRedirect: boolean
 }
 
+export interface CursorInfo {
+  dataUrl?: string
+  w?: number
+  h?: number
+  xhot: number
+  yhot: number
+}
+
 export interface XpraClientEvents {
   state: (state: ClientState, detail?: string) => void
   serverHello: (caps: Record<string, BencodeValue>) => void
@@ -30,6 +38,7 @@ export interface XpraClientEvents {
   desktopSize: (w: number, h: number) => void
   window: (action: 'new' | 'move_resize' | 'lost', win: WindowState) => void
   draw: (packet: DrawPacket, done: DrawCallback) => void
+  cursor: (info: CursorInfo | null) => void
 }
 
 export interface ConnectOptions {
@@ -438,6 +447,9 @@ export class XpraClient {
       case 'draw':
         this.onDraw(packet)
         break
+      case 'cursor':
+        this.onCursor(packet)
+        break
       case 'clipboard-request':
         this.onClipboardRequest(packet)
         break
@@ -525,6 +537,43 @@ export class XpraClient {
     const w = typeof packet[1] === 'number' ? packet[1] : 0
     const h = typeof packet[2] === 'number' ? packet[2] : 0
     this.events.desktopSize?.(w, h)
+  }
+
+  private onCursor(packet: Packet) {
+    if (packet.length <= 2) {
+      this.events.cursor?.(null)
+      return
+    }
+    const encoding = asStr(packet[1])
+    const w = typeof packet[4] === 'number' ? packet[4] : 24
+    const h = typeof packet[5] === 'number' ? packet[5] : 24
+    const xhot = typeof packet[6] === 'number' ? packet[6] : 0
+    const yhot = typeof packet[7] === 'number' ? packet[7] : 0
+    const rawData = packet.length >= 10 ? packet[9] : packet[8]
+
+    if (!rawData) {
+      this.events.cursor?.(null)
+      return
+    }
+
+    let b64 = ''
+    if (rawData instanceof Uint8Array) {
+      let binary = ''
+      const len = rawData.byteLength
+      for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(rawData[i])
+      }
+      b64 = btoa(binary)
+    } else if (typeof rawData === 'string') {
+      b64 = btoa(rawData)
+    }
+
+    if (b64) {
+      const dataUrl = `data:image/${encoding || 'png'};base64,${b64}`
+      this.events.cursor?.({ dataUrl, w, h, xhot, yhot })
+    } else {
+      this.events.cursor?.(null)
+    }
   }
 
   private onClipboardRequest(packet: Packet) {
