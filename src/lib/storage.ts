@@ -13,7 +13,6 @@ export interface Connection {
   ssl: boolean
   /** WebSocket path when proxied (e.g. '/xpra' behind the vite dev server). */
   path?: string
-  resolution?: [number, number]
   quality?: QualityPreset
 }
 

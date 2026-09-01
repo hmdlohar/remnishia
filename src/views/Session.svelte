@@ -34,7 +34,6 @@
   let isFullscreen = $state(false)
   let hideTopBar = $state(false)
   let isTouchLocked = $state(false)
-  let requestingRes = $state<string | null>(null)
 
   function toggleTouchLock() {
     isTouchLocked = !isTouchLocked
@@ -61,28 +60,20 @@
     totalPaints: 0,
   })
 
-  // Zoom & Pan state (supported in both Portrait & Landscape)
-  let isZoomFit = $state(true)
-  let zoomLevel = $state(1.0)
-  let panX = $state(0)
-  let panY = $state(0)
-
   let canvasEl: HTMLCanvasElement | null = $state(null)
   let viewportEl: HTMLElement | null = $state(null)
   let client: XpraClient | null = null
   let renderer: XpraRenderer | null = null
   let conn: (typeof $connections)[number] | undefined = $derived($connections.find((c) => c.id === id))
 
-  // Touch tracking state for trackpad & pinch zoom
+  // Touch tracking state for trackpad & two-finger scroll
   let touchStartPos: { x: number; y: number } | null = null
   let touchStartTime = 0
   let touchMoved = false
   let activePointers = new Map<number, { x: number; y: number }>()
-  let initialPinchDist = 0
-  let initialZoom = 1.0
   let prevTwoFingerMid: { x: number; y: number } | null = null
 
-  // Screen-space cursor position that stays crisp and unscaled when zooming
+  // Screen-space cursor position that stays crisp and unscaled
   let cursorScreen = $state<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visible: false })
 
   function updateCursorScreen() {
@@ -102,12 +93,9 @@
   }
 
   $effect(() => {
-    // Recompute screen position whenever cursor, zoom, or pan changes
+    // Recompute screen position whenever cursor or status changes
     cursorPos[0]
     cursorPos[1]
-    zoomLevel
-    panX
-    panY
     status
     updateCursorScreen()
   })
@@ -187,8 +175,6 @@
     if (activePointers.size === 2) {
       const state = getTwoFingerState()
       if (state) {
-        initialPinchDist = state.dist
-        initialZoom = zoomLevel
         prevTwoFingerMid = state.mid
       }
       touchMoved = true
@@ -217,25 +203,16 @@
     const prev = activePointers.get(e.pointerId)
     activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
 
-    // Two-finger gesture: Pinch zoom OR mouse wheel scroll
+    // Two-finger gesture: mouse wheel scroll
     if (activePointers.size === 2) {
       const twoState = getTwoFingerState()
-      if (twoState) {
-        // 1. Pinch zoom if distance changed noticeably
-        if (initialPinchDist > 10 && Math.abs(twoState.dist - initialPinchDist) > 12) {
-          const factor = twoState.dist / initialPinchDist
-          zoomLevel = Math.max(1.0, Math.min(4.0, Math.round(initialZoom * factor * 100) / 100))
-          isZoomFit = zoomLevel === 1.0
+      if (twoState && prevTwoFingerMid) {
+        const dMidY = twoState.mid.y - prevTwoFingerMid.y
+        if (Math.abs(dMidY) > 8) {
+          sendScroll(dMidY < 0)
         }
-        // 2. Two-finger vertical swipe triggers mouse wheel scroll
-        else if (prevTwoFingerMid) {
-          const dMidY = twoState.mid.y - prevTwoFingerMid.y
-          if (Math.abs(dMidY) > 8) {
-            sendScroll(dMidY < 0)
-          }
-        }
-        prevTwoFingerMid = twoState.mid
       }
+      prevTwoFingerMid = twoState?.mid ?? null
       return
     }
 
@@ -260,51 +237,6 @@
         const newX = Math.max(0, Math.min(desktopRes[0] - 1, Math.round(cursorPos[0] + dx * sensitivity)))
         const newY = Math.max(0, Math.min(desktopRes[1] - 1, Math.round(cursorPos[1] + dy * sensitivity)))
         cursorPos = [newX, newY]
-
-        // Deadzone Edge Panning: Viewport stays 100% STATIC until cursor reaches outer edges
-        if (zoomLevel > 1.0 && viewportEl && canvasEl) {
-          const cRect = canvasEl.getBoundingClientRect()
-          const vRect = viewportEl.getBoundingClientRect()
-
-          // Horizontal deadzone panning
-          if (cRect.width > vRect.width + 4) {
-            const maxPanX = ((cRect.width - vRect.width) / 2) / zoomLevel
-            const curScreenX = cRect.left - vRect.left + (newX / (desktopRes[0] || 1)) * cRect.width
-            const leftDeadzone = vRect.width * 0.12
-            const rightDeadzone = vRect.width * 0.88
-
-            if (curScreenX < leftDeadzone) {
-              const push = (leftDeadzone - curScreenX) / zoomLevel
-              panX = Math.min(maxPanX, panX + push)
-            } else if (curScreenX > rightDeadzone) {
-              const push = (curScreenX - rightDeadzone) / zoomLevel
-              panX = Math.max(-maxPanX, panX - push)
-            }
-          } else {
-            panX = 0
-          }
-
-          // Vertical deadzone panning
-          if (cRect.height > vRect.height + 4) {
-            const maxPanY = ((cRect.height - vRect.height) / 2) / zoomLevel
-            const curScreenY = cRect.top - vRect.top + (newY / (desktopRes[1] || 1)) * cRect.height
-            const topDeadzone = vRect.height * 0.12
-            const bottomDeadzone = vRect.height * 0.88
-
-            if (curScreenY < topDeadzone) {
-              const push = (topDeadzone - curScreenY) / zoomLevel
-              panY = Math.min(maxPanY, panY + push)
-            } else if (curScreenY > bottomDeadzone) {
-              const push = (curScreenY - bottomDeadzone) / zoomLevel
-              panY = Math.max(-maxPanY, panY - push)
-            }
-          } else {
-            panY = 0
-          }
-        } else {
-          panX = 0
-          panY = 0
-        }
 
         const btns = isDragLocked || isMouseDown ? [1] : []
         client.sendPointerPosition(newX, newY, [], btns)
@@ -373,12 +305,6 @@
   function handleWheel(e: WheelEvent) {
     if (status !== 'connected' || !client) return
     e.preventDefault()
-    if (e.ctrlKey) {
-      // Zoom with Ctrl + Wheel
-      if (e.deltaY < 0) handleZoomIn()
-      else handleZoomOut()
-      return
-    }
     const [x, y] = mouseMode === 'trackpad' ? cursorPos : getCanvasCoords(e)
     const btn = e.deltaY > 0 ? 5 : 4
     client.sendButtonAction(btn, true, x, y)
@@ -419,31 +345,6 @@
     }
   }
 
-  function handleZoomFitToggle() {
-    isZoomFit = !isZoomFit
-    if (isZoomFit) {
-      zoomLevel = 1.0
-      panX = 0
-      panY = 0
-    } else {
-      zoomLevel = 1.5
-    }
-  }
-
-  function handleZoomIn() {
-    isZoomFit = false
-    zoomLevel = Math.min(4.0, Math.round((zoomLevel + 0.25) * 100) / 100)
-  }
-
-  function handleZoomOut() {
-    zoomLevel = Math.max(1.0, Math.round((zoomLevel - 0.25) * 100) / 100)
-    if (zoomLevel === 1.0) {
-      isZoomFit = true
-      panX = 0
-      panY = 0
-    }
-  }
-
   function handleWindowKeyDown(e: KeyboardEvent) {
     if (status !== 'connected' || !client) return
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
@@ -470,31 +371,10 @@
     client.sendKeyAction(info.keyname, false, mods, info.keyval, info.str, info.keycode)
   }
 
-  function changeResolution(w: number, h: number) {
-    if (!client || status !== 'connected') return
-    requestingRes = `${w}×${h}`
-    client.sendDesktopSize(w, h)
-    setTimeout(() => {
-      if (requestingRes === `${w}×${h}`) requestingRes = null
-    }, 3000)
-  }
-
-  function matchViewportResolution() {
-    if (!viewportEl || !client || status !== 'connected') return
-    const rect = viewportEl.getBoundingClientRect()
-    const w = Math.max(640, Math.round(rect.width * (window.devicePixelRatio || 1)))
-    const h = Math.max(480, Math.round(rect.height * (window.devicePixelRatio || 1)))
-    changeResolution(w, h)
-  }
-
   onMount(() => {
     if (!conn) {
       navigate('#/')
       return
-    }
-
-    if (conn.resolution) {
-      desktopRes = conn.resolution
     }
 
     checkOrientation()
@@ -529,7 +409,6 @@
     client.events.ping = (ms) => (rtt = ms)
     client.events.desktopSize = (w, h) => {
       if (w > 0 && h > 0) {
-        requestingRes = null
         desktopRes = [w, h]
         renderer?.resize(w, h)
         cursorPos = [Math.round(w / 2), Math.round(h / 2)]
@@ -656,8 +535,6 @@
         onMouseButton={handleLandscapeMouseButton}
         onToggleDragLock={toggleDragLock}
         {isDragLocked}
-        onZoomIn={handleZoomIn}
-        onZoomOut={handleZoomOut}
         onBack={() => navigate('#/')}
         onToggleLock={toggleTouchLock}
         bind:isSymbols={lsSymbols}
@@ -668,10 +545,7 @@
       />
 
       <section bind:this={viewportEl} class="viewport-container landscape-vp">
-        <div
-          class="canvas-wrapper"
-          style:transform="scale({zoomLevel}) translate({panX}px, {panY}px)"
-        >
+        <div class="canvas-wrapper">
           <div class="canvas-relative-container">
             <canvas
               bind:this={canvasEl}
@@ -687,7 +561,7 @@
           </div>
         </div>
 
-        <!-- Fixed-size sharp screen cursor (not affected by zoom scale) -->
+        <!-- Fixed-size sharp screen cursor -->
         {#if cursorScreen.visible}
           <div
             class="fixed-screen-cursor {isDragLocked ? 'dragging' : ''}"
@@ -719,8 +593,6 @@
       <LandscapeRight
         onKeyPress={handleVirtualKeyPress}
         onMouseButton={handleLandscapeMouseButton}
-        onZoomFit={handleZoomFitToggle}
-        {isZoomFit}
         onVoiceInput={() => (showVoiceModal = true)}
         onToggleFullscreen={toggleFullscreen}
         {isFullscreen}
@@ -734,12 +606,9 @@
       />
     </div>
   {:else}
-    <!-- Portrait Layout with Zoom & Pan wrapper -->
+    <!-- Portrait Layout -->
     <section bind:this={viewportEl} class="viewport-container portrait-vp">
-      <div
-        class="canvas-wrapper"
-        style:transform="scale({zoomLevel}) translate({panX}px, {panY}px)"
-      >
+      <div class="canvas-wrapper">
         <div class="canvas-relative-container">
           <canvas
             bind:this={canvasEl}
@@ -755,7 +624,7 @@
         </div>
       </div>
 
-      <!-- Fixed-size sharp screen cursor (not affected by zoom scale) -->
+      <!-- Fixed-size sharp screen cursor -->
       {#if cursorScreen.visible}
         <div
           class="fixed-screen-cursor {isDragLocked ? 'dragging' : ''}"
@@ -849,94 +718,6 @@
               ▲ Hide Bars (Immersive)
             </button>
           </div>
-
-          <div class="zoom-controls-row">
-            <span class="muted">Zoom Level:</span>
-            <div class="zoom-group">
-              <button class="setting-btn" onclick={handleZoomOut}>−</button>
-              <button class="setting-btn {isZoomFit ? 'active' : ''}" onclick={handleZoomFitToggle}>
-                {isZoomFit ? 'Fit (100%)' : `${Math.round(zoomLevel * 100)}%`}
-              </button>
-              <button class="setting-btn" onclick={handleZoomIn}>+</button>
-            </div>
-          </div>
-
-          <div class="btn-group" style="margin-top: 4px;">
-            <button
-              class="setting-btn {isZoomFit ? 'active' : ''}"
-              onclick={() => { isZoomFit = true; zoomLevel = 1.0; panX = 0; panY = 0; }}
-            >
-              Fit Screen
-            </button>
-            <button
-              class="setting-btn {!isZoomFit && zoomLevel === 1.35 ? 'active' : ''}"
-              onclick={() => { isZoomFit = false; zoomLevel = 1.35; panX = 0; panY = 0; }}
-            >
-              Fill Height
-            </button>
-            <button
-              class="setting-btn {!isZoomFit && zoomLevel === 1.5 ? 'active' : ''}"
-              onclick={() => { isZoomFit = false; zoomLevel = 1.5; }}
-            >
-              1.5× Zoom
-            </button>
-          </div>
-        </div>
-
-        <div class="setting-section">
-          <h3>Display Resolution</h3>
-          <div class="tip-box">
-            🖥️ Host Screen: <strong>{desktopRes[0]} × {desktopRes[1]}</strong>
-            {#if requestingRes}
-              <span class="muted" style="display:block;margin-top:2px;color:#90cdf4;font-weight:600;">
-                ⏳ Requesting {requestingRes} from server…
-              </span>
-            {:else if serverInfo.shadow}
-              <span class="muted" style="display:block;margin-top:2px;font-size:11px;">
-                (Shadow session mirrors your physical PC monitor :0. Hardware monitors cannot be resized remotely.)
-              </span>
-            {/if}
-          </div>
-
-          <div class="btn-group" style="margin-top: 6px; flex-wrap: wrap;">
-            <button
-              class="setting-btn {desktopRes[0] === 1280 && desktopRes[1] === 1024 ? 'active' : ''}"
-              onclick={() => changeResolution(1280, 1024)}
-            >
-              1280 × 1024 (5:4)
-            </button>
-            <button
-              class="setting-btn {desktopRes[0] === 1024 && desktopRes[1] === 768 ? 'active' : ''}"
-              onclick={() => changeResolution(1024, 768)}
-            >
-              1024 × 768 (4:3)
-            </button>
-            <button
-              class="setting-btn {desktopRes[0] === 1200 && desktopRes[1] === 750 ? 'active' : ''}"
-              onclick={() => changeResolution(1200, 750)}
-            >
-              1200 × 750
-            </button>
-            <button
-              class="setting-btn {desktopRes[0] === 1280 && desktopRes[1] === 720 ? 'active' : ''}"
-              onclick={() => changeResolution(1280, 720)}
-            >
-              1280 × 720
-            </button>
-            <button
-              class="setting-btn {desktopRes[0] === 1920 && desktopRes[1] === 1080 ? 'active' : ''}"
-              onclick={() => changeResolution(1920, 1080)}
-            >
-              1920 × 1080
-            </button>
-          </div>
-          <button
-            class="setting-btn"
-            style="margin-top: 4px;"
-            onclick={matchViewportResolution}
-          >
-            📱 Request Viewport Resolution
-          </button>
         </div>
 
         <div class="setting-section">
@@ -1002,10 +783,6 @@
       <div>
         <span class="muted">FPS</span>
         <strong>{renderStats.fps} fps</strong>
-      </div>
-      <div>
-        <span class="muted">Zoom</span>
-        <strong>{Math.round(zoomLevel * 100)}% {isZoomFit ? '(Fit)' : ''}</strong>
       </div>
       <div>
         <span class="muted">Resolution</span>
@@ -1447,24 +1224,6 @@
     background: #2b6cb0;
     border-color: #63b3ed;
     color: #fff;
-  }
-  .zoom-controls-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    background: #1c222d;
-    padding: 6px 10px;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-  }
-  .zoom-group {
-    display: flex;
-    gap: 4px;
-  }
-  .zoom-group .setting-btn {
-    height: 28px;
-    padding: 0 10px;
-    min-width: 32px;
   }
   .info-grid {
     display: grid;

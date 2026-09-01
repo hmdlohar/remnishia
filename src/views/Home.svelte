@@ -15,8 +15,6 @@
     username: '',
     password: '',
     ssl: false,
-    resWidth: 1200,
-    resHeight: 750,
     quality: 'balanced' as QualityPreset,
     path: '/',
   })
@@ -47,8 +45,6 @@
       username: '',
       password: '',
       ssl: false,
-      resWidth: 1200,
-      resHeight: 750,
       quality: 'balanced',
       path: '/',
     }
@@ -56,7 +52,6 @@
   }
 
   function startEdit(c: Connection) {
-    const [rw, rh] = c.resolution ?? [1200, 750]
     form = {
       name: c.name,
       host: c.host,
@@ -64,17 +59,10 @@
       username: c.username,
       password: c.password,
       ssl: c.ssl,
-      resWidth: rw,
-      resHeight: rh,
       quality: c.quality ?? 'balanced',
       path: c.path ?? '/',
     }
     editing = c
-  }
-
-  function setPreset(w: number, h: number) {
-    form.resWidth = w
-    form.resHeight = h
   }
 
   function qualityHint(q: QualityPreset): string {
@@ -90,10 +78,6 @@
 
   function save() {
     if (!form.name.trim() || !form.host.trim()) return
-    const resolution: [number, number] = [
-      Math.max(640, form.resWidth || 1200),
-      Math.max(480, form.resHeight || 750),
-    ]
 
     const data = {
       name: form.name.trim(),
@@ -102,7 +86,6 @@
       username: form.username,
       password: form.password,
       ssl: form.ssl,
-      resolution,
       quality: form.quality,
       path: form.path.trim() || '/',
     }
@@ -156,7 +139,6 @@
         <button class="row" onclick={() => navigate(`#/c/${c.id}`)}>
           <div class="name-row">
             <span class="name">{c.name}</span>
-            <span class="res-badge">{c.resolution ? `${c.resolution[0]}×${c.resolution[1]}` : '1200×750'}</span>
             {#if (c.quality ?? 'balanced') !== 'balanced'}
               <span class="res-badge quality-badge">{c.quality}</span>
             {/if}
@@ -202,26 +184,6 @@
           >WS Path <input bind:value={form.path} placeholder="/" />
           <span class="muted" style="font-size:10px">use /xpra when connecting through the dev server proxy</span>
         </label>
-
-        <!-- Remote Resolution Configuration -->
-        <div class="res-config-box">
-          <span class="res-label">Remote Resolution</span>
-          <div class="pair">
-            <label>Width <input type="number" bind:value={form.resWidth} min="640" max="3840" placeholder="1200" /></label>
-            <label>Height <input type="number" bind:value={form.resHeight} min="480" max="2160" placeholder="750" /></label>
-          </div>
-          <div class="preset-row">
-            <button type="button" class="preset-btn {form.resWidth === 1200 && form.resHeight === 750 ? 'active' : ''}" onclick={() => setPreset(1200, 750)}>
-              1200 × 750
-            </button>
-            <button type="button" class="preset-btn {form.resWidth === 1280 && form.resHeight === 720 ? 'active' : ''}" onclick={() => setPreset(1280, 720)}>
-              1280 × 720
-            </button>
-            <button type="button" class="preset-btn {form.resWidth === 1920 && form.resHeight === 1080 ? 'active' : ''}" onclick={() => setPreset(1920, 1080)}>
-              1920 × 1080
-            </button>
-          </div>
-        </div>
 
         <!-- Image Quality Configuration -->
         <div class="res-config-box">
