@@ -5,6 +5,18 @@
  */
 
 import { inflateZlib } from './protocol'
+import { asStr, type BencodeValue } from './bencode'
+
+// spec-accurate (w3.org/WebCodecs) but missing from TS lib.dom: decoder-side
+// avc config, required to select Annex-B parsing for in-band SPS/PPS streams
+declare global {
+  interface AvcDecoderConfig {
+    format?: 'annexb' | 'avc'
+  }
+  interface VideoDecoderConfig {
+    avc?: AvcDecoderConfig
+  }
+}
 
 export interface DrawPacket {
   wid: number
@@ -34,6 +46,24 @@ interface QueuedDraw {
   onComplete: DrawCallback
 }
 
+/**
+ * Per-window h264 stream state. The bitstream is Annex-B (verified against
+ * xpra 3.1.5: start codes 00 00 00 01, SPS/PPS in-band on every IDR) so the
+ * decoder is configured without an avcC description.
+ *
+ * Streaming decode: frames are fed via decode() and painted from the output
+ * callback — flush() is only allowed at stream end because Chrome's decoder
+ * requires a key frame after a flush (verified experimentally), which would
+ * break every P frame.
+ */
+interface VideoStream {
+  decoder: VideoDecoder
+  nextTimestampUs: number
+  errored: boolean
+  /** FIFO of frames awaiting decoded output (draw target + resolver). */
+  waiting: Array<{ x: number; y: number; w: number; h: number; resolve: () => void }>
+}
+
 export class XpraRenderer {
   private canvas: HTMLCanvasElement | null = null
   private ctx: CanvasRenderingContext2D | null = null
@@ -46,6 +76,7 @@ export class XpraRenderer {
   private painting = false
   private paintTimeout: ReturnType<typeof setTimeout> | null = null
   private redrawPending = false
+  private videoStreams = new Map<number, VideoStream>()
 
   // Performance telemetry
   private frameCount = 0
@@ -80,6 +111,7 @@ export class XpraRenderer {
     this.offscreenCtx = null
     this.drawQueue = []
     this.painting = false
+    for (const wid of [...this.videoStreams.keys()]) this.closeVideo(wid)
     if (this.paintTimeout) {
       clearTimeout(this.paintTimeout)
       this.paintTimeout = null
@@ -276,6 +308,14 @@ export class XpraRenderer {
         break
       }
 
+      case 'h264': {
+        if (!(data instanceof Uint8Array)) {
+          throw new Error('h264 expected Uint8Array data')
+        }
+        await this.paintH264(p, data)
+        break
+      }
+
       case 'scroll': {
         if (Array.isArray(data)) {
           for (const scrollEntry of data) {
@@ -305,6 +345,102 @@ export class XpraRenderer {
     }
   }
 
+  /**
+   * Feed one h264 frame (Annex-B) to the per-window WebCodecs decoder and
+   * wait for its decoded output to be painted (or a watchdog timeout). The
+   * draw queue serializes calls, so decode order matches wire order —
+   * required for P-frame referencing.
+   */
+  private async paintH264(p: DrawPacket, data: Uint8Array): Promise<void> {
+    const { wid, x, y, w, h, options } = p
+    const isKey = asStr(options['type'] as BencodeValue) === 'IDR' || options['frame'] === 0
+    let stream = this.videoStreams.get(wid)
+
+    // (re)start stream on keyframes only — a delta with no live decoder is
+    // unrecoverable until the server sends the next IDR
+    if (!stream || stream.errored || stream.decoder.state === 'closed') {
+      if (!isKey) throw new Error('h264 delta before keyframe')
+      if (stream) this.closeVideo(wid)
+      stream = this.openDecoder(wid, data)
+      this.videoStreams.set(wid, stream)
+    }
+    if (stream.decoder.state !== 'configured') {
+      throw new Error('h264 decoder not configured')
+    }
+
+    // server marks frames the client should not paint (stale encoder output)
+    if (options['paint'] !== false) {
+      const done = new Promise<void>((resolve) => {
+        stream!.waiting.push({ x, y, w, h, resolve })
+      })
+      try {
+        stream.decoder.decode(
+          new EncodedVideoChunk({
+            type: isKey ? 'key' : 'delta',
+            timestamp: stream.nextTimestampUs,
+            data: data as Uint8Array<ArrayBuffer>,
+          }),
+        )
+      } catch (e) {
+        // e.g. "key frame required": decoder state lost — rebuild on next IDR
+        stream.errored = true
+        throw e
+      }
+      stream.nextTimestampUs += 40000 // 25fps nominal; real pts are not monotonic across IDRs
+
+      // the output callback paints + resolves; baseline H264 has no B-frames
+      // so output order matches input, but the decoder may buffer briefly —
+      // watchdog keeps the draw queue (and damage acks) moving
+      await Promise.race([done, new Promise((r) => setTimeout(r, 100))])
+      if (!this.offscreenCtx) return
+      this.requestRedraw(false)
+    }
+  }
+
+  private openDecoder(wid: number, keyframeData: Uint8Array): VideoStream {
+    const stream: VideoStream = {
+      decoder: null as unknown as VideoDecoder,
+      nextTimestampUs: 0,
+      errored: false,
+      waiting: [],
+    }
+    const decoder = new VideoDecoder({
+      output: (frame) => {
+        const job = stream.waiting.shift()
+        const ctx = this.offscreenCtx
+        if (job && ctx) {
+          ctx.drawImage(frame, job.x, job.y, job.w, job.h)
+        }
+        frame.close()
+        job?.resolve()
+      },
+      error: () => {
+        // mark dead; next keyframe rebuilds the stream via paintH264
+        stream.errored = true
+      },
+    })
+    const codec = parseAvcCodecString(keyframeData) ?? 'avc1.42C028'
+    decoder.configure({
+      codec,
+      avc: { format: 'annexb' },
+      optimizeForLatency: true,
+    })
+    stream.decoder = decoder
+    return stream
+  }
+
+  /** Drop a window's video stream (server 'eos', window close, canvas detach). */
+  closeVideo(wid: number) {
+    const stream = this.videoStreams.get(wid)
+    if (!stream) return
+    this.videoStreams.delete(wid)
+    for (const job of stream.waiting) job.resolve()
+    stream.waiting.length = 0
+    if (stream.decoder.state === 'configured') {
+      stream.decoder.close()
+    }
+  }
+
   requestRedraw(flush = false) {
     if (!this.canvas || !this.ctx || !this.offscreenCanvas) return
 
@@ -331,4 +467,23 @@ export class XpraRenderer {
       }
     }
   }
+}
+
+/**
+ * Build a WebCodecs codec string ("avc1.PPCCLL") from the in-band SPS NAL of
+ * an Annex-B stream: bytes after the NAL header are profile_idc, constraint
+ * flags, level_idc. Verified live: 67 42 c0 28 -> "avc1.42C028".
+ */
+function parseAvcCodecString(data: Uint8Array): string | null {
+  for (let i = 0; i < data.length - 4; i++) {
+    const isStart3 = data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 1
+    const isStart4 = data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 0 && data[i + 3] === 1
+    if (!isStart3 && !isStart4) continue
+    const nalHdr = isStart4 ? i + 4 : i + 3
+    if ((data[nalHdr] & 0x1f) !== 7) continue
+    if (nalHdr + 3 >= data.length) continue
+    const hex = (n: number) => data[nalHdr + n].toString(16).toUpperCase().padStart(2, '0')
+    return `avc1.${hex(1)}${hex(2)}${hex(3)}`
+  }
+  return null
 }

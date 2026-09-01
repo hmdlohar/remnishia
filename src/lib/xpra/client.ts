@@ -39,7 +39,11 @@ export interface XpraClientEvents {
   window: (action: 'new' | 'move_resize' | 'lost', win: WindowState) => void
   draw: (packet: DrawPacket, done: DrawCallback) => void
   cursor: (info: CursorInfo | null) => void
+  /** Server ended an h264 video stream for this window (encoder replaced/closed). */
+  eos: (wid: number) => void
 }
+
+export type QualityPreset = 'saver' | 'balanced' | 'lossless'
 
 export interface ConnectOptions {
   host: string
@@ -47,7 +51,24 @@ export interface ConnectOptions {
   username?: string
   password?: string
   ssl?: boolean
+  /** WebSocket path prefix, e.g. '/xpra' when proxied behind the dev server. Default '/'. */
+  path?: string
   desktopSize?: [number, number]
+  quality?: QualityPreset
+  /** Advertise h264 video (requires WebCodecs). Default: auto-detect. */
+  h264?: boolean
+}
+
+// Hello caps applied per connection. Client caps take precedence over the
+// server's own defaults (server reads "quality"/"min-quality"/"speed"/
+// "auto_refresh_delay" from hello, see xpra encodings_mixin.py).
+export const QUALITY_PRESETS: Record<
+  QualityPreset,
+  { label: string; quality: number; minQuality: number; autoRefreshDelay: number }
+> = {
+  saver: { label: 'Data saver', quality: 35, minQuality: 20, autoRefreshDelay: 2000 },
+  balanced: { label: 'Balanced', quality: 0, minQuality: 30, autoRefreshDelay: 1000 },
+  lossless: { label: 'Lossless', quality: 100, minQuality: 100, autoRefreshDelay: 300 },
 }
 
 const CLIENT_VERSION = '6.0.1'
@@ -82,7 +103,7 @@ export class XpraClient {
       error: (msg) => this.setState('error', msg),
       packet: (p) => this.route(p, opts),
     }
-    const uri = `${opts.ssl ? 'wss' : 'ws'}://${opts.host}:${opts.port}/`
+    const uri = `${opts.ssl ? 'wss' : 'ws'}://${opts.host}:${opts.port}${opts.path || '/'}`
     this.proto.connect(uri)
   }
 
@@ -369,8 +390,11 @@ export class XpraClient {
   // extra caps only sent once authentication succeeded
   private makeHello(opts: ConnectOptions) {
     const [w, h] = opts.desktopSize ?? [1200, 750]
+    const q = QUALITY_PRESETS[opts.quality ?? 'balanced']
     Object.assign(this.caps, {
-      auto_refresh_delay: 500,
+      quality: q.quality,
+      'min-quality': q.minQuality,
+      auto_refresh_delay: q.autoRefreshDelay,
       randr_notify: true,
       'server-window-resize': true,
       'notify-startup-complete': true,
@@ -383,6 +407,7 @@ export class XpraClient {
       'encoding.flush': true,
       'encoding.transparency': true,
       'encoding.client_options': true,
+      ...this.videoCaps(opts),
       windows: true,
       keyboard: true,
       xkbmap_layout: 'us',
@@ -405,6 +430,42 @@ export class XpraClient {
       screen_sizes: this.getScreenSizes(w, h),
       dpi: 96,
     })
+    if (typeof VideoDecoder !== 'undefined' || opts.h264) {
+      const core = this.caps['encodings.core'] as string[]
+      this.caps['encodings.core'] = [...core, 'h264']
+      this.caps['encodings'] = [...core, 'h264']
+    }
+  }
+
+  /**
+   * Video (h264) caps — names verified against xpra 3.1.5 server
+   * (window_video_source.py reads encoding.full_csc_modes per encoding)
+   * and the reference HTML5 client (Client.js _process_hello caps block).
+   * Only sent when WebCodecs is available (or forced for tests).
+   */
+  private videoCaps(opts: ConnectOptions): Record<string, BencodeValue> {
+    const wantVideo = opts.h264 ?? (typeof VideoDecoder !== 'undefined')
+    if (!wantVideo) return {}
+    return {
+      'encoding.full_csc_modes': {
+        h264: ['YUV420P'],
+        webp: ['BGRX', 'BGRA'],
+      },
+      'encoding.h264.YUV420P.profile': 'baseline',
+      'encoding.h264.YUV420P.level': '2.1',
+      'encoding.h264.cabac': false,
+      'encoding.h264.deblocking-filter': false,
+      'encoding.h264.fast-decode': true,
+      // prefer image encodings; video only for high-motion regions (server scoring)
+      'encoding.h264.score-delta': -20,
+      'encoding.eos': true,
+      'encoding.video_scaling': false,
+      'encoding.video_max_size': [8192, 8192],
+    }
+  }
+
+  static get h264Supported(): boolean {
+    return typeof VideoDecoder !== 'undefined'
   }
 
   private async route(packet: Packet, opts: ConnectOptions) {
@@ -446,6 +507,9 @@ export class XpraClient {
         break
       case 'draw':
         this.onDraw(packet)
+        break
+      case 'eos':
+        this.events.eos?.(typeof packet[1] === 'number' ? packet[1] : 0)
         break
       case 'cursor':
         this.onCursor(packet)
@@ -616,7 +680,22 @@ export class XpraClient {
     }
 
     if (!overrideRedirect) {
-      this.proto.send(['map-window', wid, x, y, w, h, { 'encodings.rgb_formats': ['RGBX', 'RGBA'] }])
+      this.proto.send([
+        'map-window',
+        wid,
+        x,
+        y,
+        w,
+        h,
+        {
+          'encodings.rgb_formats': ['RGBX', 'RGBA'],
+          // stable full-window video stream: motion-rect tracking recreates
+          // the x264 encoder on every region change (= 144KB IDR each time);
+          // without it the encoder survives and P frames (~1-2KB) dominate.
+          // Server reads this in WindowVideoSource.do_set_client_properties.
+          'encoding.video_subregion': false,
+        },
+      ])
       this.proto.send(['focus', wid, []])
     }
 

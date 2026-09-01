@@ -1,4 +1,7 @@
 import { writable } from 'svelte/store'
+import type { QualityPreset } from './xpra/client'
+
+export type { QualityPreset } from './xpra/client'
 
 export interface Connection {
   id: string
@@ -8,7 +11,10 @@ export interface Connection {
   username: string
   password: string
   ssl: boolean
+  /** WebSocket path when proxied (e.g. '/xpra' behind the vite dev server). */
+  path?: string
   resolution?: [number, number]
+  quality?: QualityPreset
 }
 
 const KEY = 'rem.connections'

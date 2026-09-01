@@ -129,6 +129,56 @@ notifications: true`, `clipboard:false`, sound/file/print off,
 Adding `webp` is one entry — WebP is universally supported in mobile
 browsers and probably the best lossy choice on phones (M3 decision).
 
+### h264 video (verified live against xpra 3.1.5)
+
+Enabled when WebCodecs exists (`typeof VideoDecoder !== 'undefined'`).
+Extra hello caps (client.ts `videoCaps()`, names verified against
+`window_video_source.py` + reference `Client.js:1159-1177`):
+`encoding.full_csc_modes: {h264:['YUV420P'], webp:['BGRX','BGRA']}`,
+`encoding.h264.YUV420P.profile 'baseline'`, `level '2.1'`,
+`cabac:false`, `deblocking-filter:false`, `fast-decode:true`,
+`score-delta:-20` (video only for motion regions; images stay default),
+`encoding.eos:true`. `h264` appended to `encodings`/`encodings.core`.
+Server picks video only when it detects a motion subregion / full-frame
+updates; everything else keeps using webp/jpeg/rgb.
+
+Draw packet: `['draw', wid, x, y, w, h, 'h264', <Uint8Array Annex-B>,
+packetSequence, 0, options]` with `options = { frame, pts, type, csc }`:
+`frame` 0 = keyframe / N = delta, `type` bytes `'IDR'|'P'`, `csc` bytes
+`'YUV420P'`, rowstride always 0, possible `paint:false` (skip painting),
+`scaled_size` (video was downscaled — drawImage scales back up),
+`flush-encoder`. Bitstream: Annex-B start codes `00 00 00 01`, SPS+PPS+SEI
+in-band on every IDR (NAL types 7,8,6,5), deltas NAL type 1 only. Codec
+string is parsed from the in-band SPS (`67 42 c0 28` → `avc1.42C028`).
+Keyframes measured ~144KB, P frames ~1-2KB @1080p.
+
+Server sends `['eos', wid]` when it tears down a video encoder (replaced,
+window change) → client must drop the per-window decoder; next IDR
+rebuilds it (renderer `closeVideo`, client event `eos`).
+
+**Error acks reset the encoder.** When the client acks a draw with an
+error (`damage-sequence ... errorMsg`), the server calls
+`client_decode_error()` → `cleanup_codecs()` → destroys the x264 encoder
+→ the next frame is a fresh encoder → **full 1080p IDR (~140-170KB)**.
+A client that acks every frame as an error forces IDR-every-frame
+(~1.4MB/s at 10fps). This bit us twice: tests/h264probe.ts must attach a
+draw handler that acks success, and a phone whose decoder stalls (e.g.
+background tab → 2s watchdog timeout → error ack) pays one IDR per
+stall. Video is also sent with `encoding.video_subregion:false` in
+map-window properties: motion-rect tracking recreates the encoder on
+every region change (same IDR cost); with it off, one stable full-window
+stream measured **1 IDR / 486 P frames ≈ 26 KB/s** of h264 traffic.
+
+Decoder design (renderer.ts): one `VideoDecoder` per window, configured
+`{ codec, avc:{format:'annexb'}, optimizeForLatency:true }`. Streaming:
+`decode()` per frame, paint from the output callback (FIFO waiters), NO
+`flush()` during the stream — **Chrome requires a key frame after
+`flush()`** (verified in Chrome 145 headless: per-frame flush rejected
+every P frame). Flush only at stream end. Baseline has no B-frames so
+output order matches wire order. Delta before any keyframe → error, wait
+for next IDR. Damage ack after paint (or 100ms watchdog) keeps server
+batching stats honest.
+
 ## Packet routing today (client.ts)
 
 Handled: `hello`, `challenge`, `auth`, `ping`, `ping_echo`, `disconnect`.

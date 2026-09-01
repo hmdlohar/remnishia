@@ -77,10 +77,14 @@ xpra shadow --bind-ws=0.0.0.0:10000 :0     # shadows the running desktop, passwo
 - **Fragmented packets:** in `protocol.ts drain()`, if the body isn't fully
   buffered yet (`takeBytes` returns null) you must NOT clear `this.header` —
   return and wait for more data. Clearing it desyncs the stream.
-- **WebCrypto (`crypto.subtle`) requires a secure context.** Over plain
-  `http://<lan-ip>:5173` from a phone, auth silently breaks. Options:
-  `npx vite --https`, or reach the dev server over Tailscale Serve/HTTPS,
-  or `adb reverse`. (localhost always counts as secure.)
+- **WebCrypto (`crypto.subtle`) AND WebCodecs (`VideoDecoder`) require a
+  secure context.** Over plain `http://<lan-ip>:5173` from a phone, auth
+  breaks and h264 caps are never sent. Dev setup now covers this: vite runs
+  HTTPS (self-signed, `@vitejs/plugin-basic-ssl`) and proxies `/xpra` →
+  `ws://localhost:10000`, so app + WebSocket share one https origin
+  (no mixed content). Phone: `https://<wg-or-lan-ip>:5173`, accept the cert,
+  connection form: port 5173, SSL on, WS path `/xpra`. (localhost always
+  counts as secure.)
 - **Compression flags** (level byte): 0x10 lz4, 0x20 lzo, 0x40 brotli, else
   zlib. We advertise only zlib and fail loudly on others. Server honors
   `compression_level: 1` from hello caps — most packets arrive with 0x08/0x00
@@ -92,6 +96,11 @@ xpra shadow --bind-ws=0.0.0.0:10000 :0     # shadows the running desktop, passwo
 - **Digest selection:** we offer `["hmac+sha256","xor"]`. Server's
   `choose_digest` prefers strongest match → `hmac+sha256` (salt digest too).
   Don't add md5/sha1/384/512 unless you also handle them in crypto.ts.
+- **Chrome VideoDecoder requires a key frame after `flush()`.** Per-frame
+  flush in the h264 path rejects every P frame ("A key frame is required
+  after configure() or flush()", verified Chrome 145 headless). Stream:
+  `decode()` per frame, paint from output callback, flush only at stream
+  end. See docs/ARCHITECTURE.md "h264 video".
 
 ## Milestones
 
@@ -102,6 +111,9 @@ xpra shadow --bind-ws=0.0.0.0:10000 :0     # shadows the running desktop, passwo
 - [x] **M5** landscape split layout (left/right control panels around viewport, zoom/pan)
 - [x] **M6** shortcut bar, modes (nav/dev/edit), user macros
 - [x] **M7** perf pass: over-decode avoidance, request_redraw batching, FPS/decode latency telemetry
+- [x] **M8** quality presets (saver/balanced/lossless → hello caps) + h264 video decode via WebCodecs
+  (wire format verified live + headless-browser replay test; see ARCHITECTURE.md "h264 video").
+  `tests/h264probe.ts` captures/inspects h264 draw packets from a live server (H264_CAPTURE=...json).
 
 ## Current file map
 

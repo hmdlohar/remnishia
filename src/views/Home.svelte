@@ -1,8 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { connections, type Connection } from '../lib/storage'
+  import { connections, type Connection, type QualityPreset } from '../lib/storage'
   import { navigate } from '../lib/router'
   import { subscribePwa, promptInstall, isStandalone } from '../lib/pwa'
+  import { QUALITY_PRESETS } from '../lib/xpra/client'
+
+  const QUALITY_ORDER: QualityPreset[] = ['saver', 'balanced', 'lossless']
 
   let editing = $state<Connection | 'new' | null>(null)
   let form = $state({
@@ -14,6 +17,8 @@
     ssl: false,
     resWidth: 1200,
     resHeight: 750,
+    quality: 'balanced' as QualityPreset,
+    path: '/',
   })
   let canAutoInstall = $state(false)
   let isAppStandalone = $state(false)
@@ -44,6 +49,8 @@
       ssl: false,
       resWidth: 1200,
       resHeight: 750,
+      quality: 'balanced',
+      path: '/',
     }
     editing = 'new'
   }
@@ -59,6 +66,8 @@
       ssl: c.ssl,
       resWidth: rw,
       resHeight: rh,
+      quality: c.quality ?? 'balanced',
+      path: c.path ?? '/',
     }
     editing = c
   }
@@ -66,6 +75,17 @@
   function setPreset(w: number, h: number) {
     form.resWidth = w
     form.resHeight = h
+  }
+
+  function qualityHint(q: QualityPreset): string {
+    switch (q) {
+      case 'saver':
+        return 'Lowest data usage (~300-600 KB/s), softer picture — best for mobile data'
+      case 'balanced':
+        return 'Server auto-tunes quality to connection speed'
+      case 'lossless':
+        return 'Pixel-perfect, high data usage — best for WiFi'
+    }
   }
 
   function save() {
@@ -83,6 +103,8 @@
       password: form.password,
       ssl: form.ssl,
       resolution,
+      quality: form.quality,
+      path: form.path.trim() || '/',
     }
 
     if (editing === 'new') {
@@ -135,6 +157,9 @@
           <div class="name-row">
             <span class="name">{c.name}</span>
             <span class="res-badge">{c.resolution ? `${c.resolution[0]}×${c.resolution[1]}` : '1200×750'}</span>
+            {#if (c.quality ?? 'balanced') !== 'balanced'}
+              <span class="res-badge quality-badge">{c.quality}</span>
+            {/if}
           </div>
           <span class="muted mono">{c.ssl ? 'wss' : 'ws'}://{c.host}:{c.port}</span>
         </button>
@@ -173,6 +198,10 @@
         </div>
         <label>Username <input bind:value={form.username} autocomplete="off" /></label>
         <label>Password <input type="password" bind:value={form.password} autocomplete="off" /></label>
+        <label
+          >WS Path <input bind:value={form.path} placeholder="/" />
+          <span class="muted" style="font-size:10px">use /xpra when connecting through the dev server proxy</span>
+        </label>
 
         <!-- Remote Resolution Configuration -->
         <div class="res-config-box">
@@ -192,6 +221,23 @@
               1920 × 1080
             </button>
           </div>
+        </div>
+
+        <!-- Image Quality Configuration -->
+        <div class="res-config-box">
+          <span class="res-label">Image Quality</span>
+          <div class="preset-row">
+            {#each QUALITY_ORDER as preset (preset)}
+              <button
+                type="button"
+                class="preset-btn {form.quality === preset ? 'active' : ''}"
+                onclick={() => (form.quality = preset)}
+              >
+                {QUALITY_PRESETS[preset].label}
+              </button>
+            {/each}
+          </div>
+          <span class="quality-hint">{qualityHint(form.quality)}</span>
         </div>
 
         <div class="actions">
@@ -462,6 +508,15 @@
     background: #2b6cb0;
     border-color: #63b3ed;
     color: #fff;
+  }
+  .quality-hint {
+    font-size: 10px;
+    color: var(--fg-muted);
+    line-height: 1.3;
+  }
+  .quality-badge {
+    color: #f6ad55;
+    border-color: #7b5219;
   }
   .sheet h2 {
     margin: 0;

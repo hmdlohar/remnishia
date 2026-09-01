@@ -20,6 +20,7 @@
   let rtt = $state<number | null>(null)
   let packetCount = $state(0)
   let drawCount = $state(0)
+  let h264Count = $state(0)
   let desktopRes = $state<[number, number]>([1280, 720])
   let serverInfo = $state<{ version?: string; shadow?: boolean; display?: string }>({})
   let log = $state<{ name: string; size: number }[]>([])
@@ -542,6 +543,7 @@
     }
     client.events.draw = (drawPacket, done) => {
       drawCount++
+      if (drawPacket.coding === 'h264') h264Count++
       const reqW = drawPacket.x + drawPacket.w
       const reqH = drawPacket.y + drawPacket.h
       if (reqW > desktopRes[0] || reqH > desktopRes[1]) {
@@ -557,6 +559,9 @@
     client.events.cursor = (cur) => {
       activeCursor = cur
     }
+    client.events.eos = (wid) => {
+      renderer?.closeVideo(wid)
+    }
 
     client.connect({
       host: conn.host,
@@ -564,7 +569,9 @@
       username: conn.username,
       password: conn.password,
       ssl: conn.ssl,
+      path: conn.path,
       desktopSize: desktopRes,
+      quality: conn.quality ?? 'balanced',
     })
 
     window.addEventListener('keydown', handleWindowKeyDown)
@@ -963,6 +970,7 @@
           <div class="info-grid">
             <div><span class="muted">FPS:</span> <strong>{renderStats.fps}</strong></div>
             <div><span class="muted">RTT:</span> <strong>{rtt === null ? '—' : `${rtt} ms`}</strong></div>
+            <div><span class="muted">Video:</span> <strong>{h264Count > 0 ? `h264 (${h264Count} frames)` : 'off'}</strong></div>
             <div><span class="muted">Resolution:</span> <strong>{desktopRes[0]}×{desktopRes[1]}</strong></div>
             <div><span class="muted">Display:</span> <strong>{serverInfo.display || ':0'}</strong></div>
           </div>
