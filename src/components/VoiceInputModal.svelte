@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
-
   let {
     open,
     onSend,
@@ -11,139 +9,28 @@
     onClose: () => void
   } = $props()
 
-  let isListening = $state(false)
   let transcript = $state('')
-  let interimTranscript = $state('')
-  let errorMsg = $state('')
-  let isSupported = $state(true)
-  let isBlocked = $state(false)
-  let recognition: any = null
   let textareaEl: HTMLTextAreaElement | null = $state(null)
 
-  function initRecognition() {
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    if (!SpeechRecognition) {
-      isSupported = false
-      errorMsg = 'Web Speech API is not supported on this browser.'
-      return
-    }
-
-    try {
-      recognition = new SpeechRecognition()
-      recognition.continuous = true
-      recognition.interimResults = true
-      recognition.lang = navigator.language || 'en-US'
-
-      recognition.onstart = () => {
-        isListening = true
-        isBlocked = false
-        errorMsg = ''
-      }
-
-      recognition.onresult = (event: any) => {
-        let finalChunk = ''
-        let interimChunk = ''
-
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          const res = event.results[i]
-          if (res.isFinal) {
-            finalChunk += res[0].transcript
-          } else {
-            interimChunk += res[0].transcript
-          }
-        }
-
-        if (finalChunk) {
-          transcript = (transcript ? transcript + ' ' : '') + finalChunk.trim()
-        }
-        interimTranscript = interimChunk
-      }
-
-      recognition.onerror = (event: any) => {
-        if (event.error === 'no-speech') return
-        isListening = false
-        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-          isBlocked = true
-          errorMsg = 'Browser mic blocked (HTTP restriction). Tap below to use keyboard mic.'
-        } else {
-          errorMsg = `Mic error: ${event.error}`
-        }
-      }
-
-      recognition.onend = () => {
-        isListening = false
-      }
-    } catch (e: any) {
-      isSupported = false
-      errorMsg = e.message || 'Speech recognition failed to initialize'
-    }
-  }
-
-  function startListening() {
-    if (!recognition) initRecognition()
-    if (!recognition) return
-
-    try {
-      errorMsg = ''
-      isBlocked = false
-      recognition.start()
-      isListening = true
-    } catch (e: any) {
-      if (e.name !== 'InvalidStateError') {
-        isBlocked = true
-        errorMsg = 'Could not access browser mic. Tap below to use keyboard mic.'
-      }
-    }
-  }
-
-  function stopListening() {
-    if (recognition && isListening) {
-      recognition.stop()
-      isListening = false
-    }
-  }
-
-  function toggleListening() {
-    if (isListening) stopListening()
-    else startListening()
-  }
-
   function handleSend(mode: 'paste' | 'type') {
-    const fullText = (transcript + (interimTranscript ? ' ' + interimTranscript : '')).trim()
+    const fullText = transcript.trim()
     if (fullText) {
-      stopListening()
       onSend(fullText, mode)
       transcript = ''
-      interimTranscript = ''
       onClose()
     }
   }
 
   function handleClear() {
     transcript = ''
-    interimTranscript = ''
-    errorMsg = ''
   }
 
   $effect(() => {
     if (open) {
-      initRecognition()
-      setTimeout(() => {
-        startListening()
-        textareaEl?.focus()
-      }, 150)
+      setTimeout(() => textareaEl?.focus(), 50)
     } else {
-      stopListening()
       transcript = ''
-      interimTranscript = ''
-      errorMsg = ''
-      isBlocked = false
     }
-  })
-
-  onDestroy(() => {
-    stopListening()
   })
 </script>
 
@@ -159,52 +46,27 @@
     <div class="voice-card">
       <div class="voice-header">
         <div class="header-left">
-          <span class="mic-status-icon {isListening ? 'pulsing' : ''}">
-            {isListening ? '🔴' : '🎙️'}
-          </span>
-          <h3>{isListening ? 'Listening...' : 'Voice & Text Input'}</h3>
+          <span class="mic-status-icon">🎙️</span>
+          <h3>Voice & Text Input</h3>
         </div>
         <button class="icon-close" onclick={onClose} aria-label="Close">✕</button>
       </div>
 
-      {#if errorMsg}
-        <div class="error-banner">
-          <span>{errorMsg}</span>
-        </div>
-      {/if}
+      <div class="hint-banner">
+        <span>Tap the 🎙️ key on your phone keyboard to dictate, or type below.</span>
+      </div>
 
       <div class="textarea-wrapper">
         <textarea
           bind:this={textareaEl}
           bind:value={transcript}
-          placeholder="Speak or tap here to use your phone's 🎙️ keyboard mic..."
+          placeholder="Dictate with your phone keyboard's mic, or type here..."
           rows="4"
         ></textarea>
-        {#if interimTranscript}
-          <div class="interim-preview">
-            <span class="interim-text">... {interimTranscript}</span>
-          </div>
-        {/if}
       </div>
 
       <div class="controls-row">
-        {#if isSupported && !isBlocked}
-          <button
-            class="mic-toggle-btn {isListening ? 'recording' : ''}"
-            onclick={toggleListening}
-          >
-            {isListening ? '⏹ Stop Mic' : '🎙️ Start Mic'}
-          </button>
-        {:else}
-          <button
-            class="mic-toggle-btn"
-            onclick={() => textareaEl?.focus()}
-          >
-            ⌨ Dictate
-          </button>
-        {/if}
-
-        <button class="clear-btn" onclick={handleClear} disabled={!transcript && !interimTranscript}>
+        <button class="clear-btn" onclick={handleClear} disabled={!transcript}>
           Clear
         </button>
       </div>
@@ -213,7 +75,7 @@
         <button class="btn secondary" onclick={onClose}>Cancel</button>
         <button
           class="btn type-btn"
-          disabled={!transcript && !interimTranscript}
+          disabled={!transcript}
           onclick={() => handleSend('type')}
           title="Type text directly into remote window"
         >
@@ -221,7 +83,7 @@
         </button>
         <button
           class="btn primary"
-          disabled={!transcript && !interimTranscript}
+          disabled={!transcript}
           onclick={() => handleSend('paste')}
           title="Instantly paste text into remote clipboard (0ms)"
         >
@@ -273,19 +135,6 @@
   .mic-status-icon {
     font-size: 18px;
   }
-  .mic-status-icon.pulsing {
-    animation: pulse 1.2s infinite alternate;
-  }
-  @keyframes pulse {
-    0% {
-      opacity: 0.4;
-      transform: scale(0.9);
-    }
-    100% {
-      opacity: 1;
-      transform: scale(1.15);
-    }
-  }
   h3 {
     margin: 0;
     font-size: 16px;
@@ -300,10 +149,10 @@
     padding: 4px 8px;
     border-radius: 6px;
   }
-  .error-banner {
-    background: rgba(229, 62, 62, 0.15);
-    border: 1px solid #e53e3e;
-    color: #feb2b2;
+  .hint-banner {
+    background: rgba(49, 130, 206, 0.12);
+    border: 1px solid #2b6cb0;
+    color: #90cdf4;
     font-size: 12px;
     padding: 8px 10px;
     border-radius: 8px;
@@ -331,33 +180,11 @@
     outline: none;
     border-color: #3182ce;
   }
-  .interim-preview {
-    margin-top: 4px;
-    font-size: 12px;
-    color: #90cdf4;
-    font-style: italic;
-  }
   .controls-row {
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-end;
     align-items: center;
     gap: 6px;
-  }
-  .mic-toggle-btn {
-    background: #1e2634;
-    color: #90cdf4;
-    border: 1px solid #2b6cb0;
-    border-radius: 8px;
-    padding: 6px 12px;
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .mic-toggle-btn.recording {
-    background: #9b2c2c;
-    border-color: #fc8181;
-    color: #fff;
   }
   .clear-btn {
     background: transparent;
