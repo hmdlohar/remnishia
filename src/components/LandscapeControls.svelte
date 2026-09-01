@@ -3,19 +3,11 @@
     onKeyPress,
     onMouseButton,
     onToggleKbd,
-    onZoomFit,
-    onZoomIn,
-    onZoomOut,
-    isZoomFit = true,
     showKbd = false,
   }: {
     onKeyPress: (keyname: string, modifiers: string[], keyval?: number, str?: string) => void
     onMouseButton: (button: number) => void
     onToggleKbd: () => void
-    onZoomFit: () => void
-    onZoomIn: () => void
-    onZoomOut: () => void
-    isZoomFit?: boolean
     showKbd?: boolean
   } = $props()
 
@@ -123,12 +115,7 @@
     <button class="wbtn macro" onclick={() => pressKey('Delete', 0xffff)}>Del</button>
   </div>
 
-  <div class="panel-section zoom-tools">
-    <button class="wbtn zoom-btn {isZoomFit ? 'active' : ''}" onclick={onZoomFit}>
-      {isZoomFit ? 'Fit' : '1:1'}
-    </button>
-    <button class="wbtn zoom-btn" onclick={onZoomIn}>+</button>
-    <button class="wbtn zoom-btn" onclick={onZoomOut}>−</button>
+  <div class="panel-section row-tools">
     <button class="wbtn kbd-toggle {showKbd ? 'active' : ''}" onclick={onToggleKbd}>⌨</button>
   </div>
 </aside>
@@ -212,14 +199,12 @@
   .dbtn:active {
     background: #3182ce;
   }
-  .row-tools,
-  .zoom-tools {
+  .row-tools {
     display: flex;
     flex-direction: row;
     gap: 4px;
   }
-  .row-tools .wbtn,
-  .zoom-tools .wbtn {
+  .row-tools .wbtn {
     flex: 1;
   }
   .mouse-btn {
@@ -235,13 +220,6 @@
   .macro {
     font-size: 11px;
     height: 28px;
-  }
-  .zoom-btn {
-    font-size: 11px;
-  }
-  .zoom-btn.active {
-    border-color: var(--accent);
-    color: var(--accent);
   }
   .kbd-toggle.active {
     border-color: var(--accent);

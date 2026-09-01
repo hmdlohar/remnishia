@@ -4,8 +4,6 @@
     onMouseButton,
     onToggleDragLock,
     isDragLocked = false,
-    onZoomIn,
-    onZoomOut,
     onBack,
     onToggleLock,
     isSymbols = $bindable(false),
@@ -18,8 +16,6 @@
     onMouseButton: (button: number) => void
     onToggleDragLock: () => void
     isDragLocked?: boolean
-    onZoomIn: () => void
-    onZoomOut: () => void
     onBack?: () => void
     onToggleLock?: () => void
     isSymbols?: boolean
@@ -112,8 +108,6 @@
     <button class="t-btn {isDragLocked ? 'active' : ''}" onclick={onToggleDragLock}>
       {isDragLocked ? '🔒 Drag' : 'Drag'}
     </button>
-    <button class="t-btn zoom-btn" onclick={onZoomIn} title="Zoom In">+</button>
-    <button class="t-btn zoom-btn" onclick={onZoomOut} title="Zoom Out">−</button>
     {#if onToggleLock}
       <button class="t-btn lock-btn" onclick={onToggleLock} title="Touch / Pocket Lock">🔒</button>
     {/if}
@@ -253,11 +247,6 @@
     background: #2b6cb0;
     color: #fff;
     border-color: #63b3ed;
-  }
-  .t-btn.zoom-btn {
-    flex: 0.6;
-    font-size: 14px;
-    font-weight: 700;
   }
   .t-btn.lock-btn {
     flex: 0.5;

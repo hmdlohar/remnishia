@@ -11,8 +11,6 @@
   let {
     onKeyPress,
     onMouseButton,
-    onZoomFit,
-    isZoomFit = true,
     onVoiceInput,
     onToggleFullscreen,
     isFullscreen = false,
@@ -26,8 +24,6 @@
   }: {
     onKeyPress: (keyname: string, modifiers: string[], keyval?: number, str?: string) => void
     onMouseButton: (button: number) => void
-    onZoomFit: () => void
-    isZoomFit?: boolean
     onVoiceInput: () => void
     onToggleFullscreen: () => void
     isFullscreen?: boolean
@@ -159,9 +155,6 @@
   <!-- Top Utility Toolbar -->
   <div class="wing-toolbar">
     <button class="t-btn mouse-btn" onclick={() => onMouseButton(3)}>Right Click</button>
-    <button class="t-btn {isZoomFit ? 'active' : ''}" onclick={onZoomFit}>
-      {isZoomFit ? 'Fit' : '1:1'}
-    </button>
     <button class="t-btn voice-btn" onclick={onVoiceInput} title="Voice / Dictate">🎙️</button>
     <button class="t-btn corner-top-right" onclick={onToggleFullscreen} title="Fullscreen">
       {isFullscreen ? '⛶ Off' : '⛶'}
@@ -289,11 +282,6 @@
   .t-btn.mouse-btn:active {
     background: #2b6cb0;
     color: #fff;
-  }
-  .t-btn.active {
-    background: #2b6cb0;
-    color: #fff;
-    border-color: #63b3ed;
   }
   .t-btn.voice-btn {
     font-size: 12px;

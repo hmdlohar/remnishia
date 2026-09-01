@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { XpraClient, type ClientState, type WindowState, type CursorInfo } from '../lib/xpra/client'
   import { XpraRenderer, type RenderStats } from '../lib/xpra/renderer'
-  import { asStr, type BencodeValue } from '../lib/xpra/bencode'
+  import { asStr } from '../lib/xpra/bencode'
   import { translateKeyEvent } from '../lib/xpra/keycodes'
   import type { MacroItem } from '../lib/macros'
   import { connections } from '../lib/storage'
@@ -18,13 +18,9 @@
   let status = $state<ClientState>('idle')
   let detail = $state('')
   let rtt = $state<number | null>(null)
-  let packetCount = $state(0)
-  let drawCount = $state(0)
   let h264Count = $state(0)
   let desktopRes = $state<[number, number]>([1280, 720])
   let serverInfo = $state<{ version?: string; shadow?: boolean; display?: string }>({})
-  let log = $state<{ name: string; size: number }[]>([])
-  let showDebug = $state(false)
   let showKbd = $state(false)
   let showSettings = $state(false)
   let showVoiceModal = $state(false)
@@ -32,7 +28,6 @@
   let isLandscape = $state(false)
   let forceLandscape = $state(false)
   let isFullscreen = $state(false)
-  let hideTopBar = $state(false)
   let isTouchLocked = $state(false)
 
   function toggleTouchLock() {
@@ -60,20 +55,28 @@
     totalPaints: 0,
   })
 
+  // Zoom & Pan state (supported in both Portrait & Landscape)
+  let isZoomFit = $state(true)
+  let zoomLevel = $state(1.0)
+  let panX = $state(0)
+  let panY = $state(0)
+
   let canvasEl: HTMLCanvasElement | null = $state(null)
   let viewportEl: HTMLElement | null = $state(null)
   let client: XpraClient | null = null
   let renderer: XpraRenderer | null = null
   let conn: (typeof $connections)[number] | undefined = $derived($connections.find((c) => c.id === id))
 
-  // Touch tracking state for trackpad & two-finger scroll
+  // Touch tracking state for trackpad & pinch zoom
   let touchStartPos: { x: number; y: number } | null = null
   let touchStartTime = 0
   let touchMoved = false
   let activePointers = new Map<number, { x: number; y: number }>()
+  let initialPinchDist = 0
+  let initialZoom = 1.0
   let prevTwoFingerMid: { x: number; y: number } | null = null
 
-  // Screen-space cursor position that stays crisp and unscaled
+  // Screen-space cursor position that stays crisp and unscaled when zooming
   let cursorScreen = $state<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visible: false })
 
   function updateCursorScreen() {
@@ -93,16 +96,15 @@
   }
 
   $effect(() => {
-    // Recompute screen position whenever cursor or status changes
+    // Recompute screen position whenever cursor, zoom, or pan changes
     cursorPos[0]
     cursorPos[1]
+    zoomLevel
+    panX
+    panY
     status
     updateCursorScreen()
   })
-
-  function fmtPacket(packet: BencodeValue[]): string {
-    return asStr(packet[0])
-  }
 
   function checkOrientation() {
     if (typeof window !== 'undefined') {
@@ -175,6 +177,8 @@
     if (activePointers.size === 2) {
       const state = getTwoFingerState()
       if (state) {
+        initialPinchDist = state.dist
+        initialZoom = zoomLevel
         prevTwoFingerMid = state.mid
       }
       touchMoved = true
@@ -203,16 +207,25 @@
     const prev = activePointers.get(e.pointerId)
     activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
 
-    // Two-finger gesture: mouse wheel scroll
+    // Two-finger gesture: Pinch zoom OR mouse wheel scroll
     if (activePointers.size === 2) {
       const twoState = getTwoFingerState()
-      if (twoState && prevTwoFingerMid) {
-        const dMidY = twoState.mid.y - prevTwoFingerMid.y
-        if (Math.abs(dMidY) > 8) {
-          sendScroll(dMidY < 0)
+      if (twoState) {
+        // 1. Pinch zoom if distance changed noticeably
+        if (initialPinchDist > 10 && Math.abs(twoState.dist - initialPinchDist) > 12) {
+          const factor = twoState.dist / initialPinchDist
+          zoomLevel = Math.max(1.0, Math.min(4.0, Math.round(initialZoom * factor * 100) / 100))
+          isZoomFit = zoomLevel === 1.0
         }
+        // 2. Two-finger vertical swipe triggers mouse wheel scroll
+        else if (prevTwoFingerMid) {
+          const dMidY = twoState.mid.y - prevTwoFingerMid.y
+          if (Math.abs(dMidY) > 8) {
+            sendScroll(dMidY < 0)
+          }
+        }
+        prevTwoFingerMid = twoState.mid
       }
-      prevTwoFingerMid = twoState?.mid ?? null
       return
     }
 
@@ -237,6 +250,51 @@
         const newX = Math.max(0, Math.min(desktopRes[0] - 1, Math.round(cursorPos[0] + dx * sensitivity)))
         const newY = Math.max(0, Math.min(desktopRes[1] - 1, Math.round(cursorPos[1] + dy * sensitivity)))
         cursorPos = [newX, newY]
+
+        // Deadzone Edge Panning: Viewport stays 100% STATIC until cursor reaches outer edges
+        if (zoomLevel > 1.0 && viewportEl && canvasEl) {
+          const cRect = canvasEl.getBoundingClientRect()
+          const vRect = viewportEl.getBoundingClientRect()
+
+          // Horizontal deadzone panning
+          if (cRect.width > vRect.width + 4) {
+            const maxPanX = ((cRect.width - vRect.width) / 2) / zoomLevel
+            const curScreenX = cRect.left - vRect.left + (newX / (desktopRes[0] || 1)) * cRect.width
+            const leftDeadzone = vRect.width * 0.12
+            const rightDeadzone = vRect.width * 0.88
+
+            if (curScreenX < leftDeadzone) {
+              const push = (leftDeadzone - curScreenX) / zoomLevel
+              panX = Math.min(maxPanX, panX + push)
+            } else if (curScreenX > rightDeadzone) {
+              const push = (curScreenX - rightDeadzone) / zoomLevel
+              panX = Math.max(-maxPanX, panX - push)
+            }
+          } else {
+            panX = 0
+          }
+
+          // Vertical deadzone panning
+          if (cRect.height > vRect.height + 4) {
+            const maxPanY = ((cRect.height - vRect.height) / 2) / zoomLevel
+            const curScreenY = cRect.top - vRect.top + (newY / (desktopRes[1] || 1)) * cRect.height
+            const topDeadzone = vRect.height * 0.12
+            const bottomDeadzone = vRect.height * 0.88
+
+            if (curScreenY < topDeadzone) {
+              const push = (topDeadzone - curScreenY) / zoomLevel
+              panY = Math.min(maxPanY, panY + push)
+            } else if (curScreenY > bottomDeadzone) {
+              const push = (curScreenY - bottomDeadzone) / zoomLevel
+              panY = Math.max(-maxPanY, panY - push)
+            }
+          } else {
+            panY = 0
+          }
+        } else {
+          panX = 0
+          panY = 0
+        }
 
         const btns = isDragLocked || isMouseDown ? [1] : []
         client.sendPointerPosition(newX, newY, [], btns)
@@ -305,6 +363,12 @@
   function handleWheel(e: WheelEvent) {
     if (status !== 'connected' || !client) return
     e.preventDefault()
+    if (e.ctrlKey) {
+      // Zoom with Ctrl + Wheel
+      if (e.deltaY < 0) handleZoomIn()
+      else handleZoomOut()
+      return
+    }
     const [x, y] = mouseMode === 'trackpad' ? cursorPos : getCanvasCoords(e)
     const btn = e.deltaY > 0 ? 5 : 4
     client.sendButtonAction(btn, true, x, y)
@@ -342,6 +406,31 @@
       client.pasteTextToRemote(text)
     } else {
       client.sendText(text, false)
+    }
+  }
+
+  function handleZoomFitToggle() {
+    isZoomFit = !isZoomFit
+    if (isZoomFit) {
+      zoomLevel = 1.0
+      panX = 0
+      panY = 0
+    } else {
+      zoomLevel = 1.5
+    }
+  }
+
+  function handleZoomIn() {
+    isZoomFit = false
+    zoomLevel = Math.min(4.0, Math.round((zoomLevel + 0.25) * 100) / 100)
+  }
+
+  function handleZoomOut() {
+    zoomLevel = Math.max(1.0, Math.round((zoomLevel - 0.25) * 100) / 100)
+    if (zoomLevel === 1.0) {
+      isZoomFit = true
+      panX = 0
+      panY = 0
     }
   }
 
@@ -421,7 +510,6 @@
       }
     }
     client.events.draw = (drawPacket, done) => {
-      drawCount++
       if (drawPacket.coding === 'h264') h264Count++
       const reqW = drawPacket.x + drawPacket.w
       const reqH = drawPacket.y + drawPacket.h
@@ -430,10 +518,6 @@
         renderer?.resize(desktopRes[0], desktopRes[1])
       }
       renderer?.queueDraw(drawPacket, done)
-    }
-    client.events.packet = (name, packet) => {
-      packetCount++
-      log = [{ name: fmtPacket(packet), size: 0 }, ...log].slice(0, 40)
     }
     client.events.cursor = (cur) => {
       activeCursor = cur
@@ -482,8 +566,8 @@
   )
 </script>
 
-<main class="session {isLandscape ? 'landscape' : 'portrait'} {hideTopBar ? 'immersive' : ''}">
-  {#if !isLandscape && !hideTopBar}
+<main class="session {isLandscape ? 'landscape' : 'portrait'}">
+  {#if !isLandscape}
     <header class="clean-header">
       <button class="icon" aria-label="Back" onclick={() => navigate('#/')}>‹</button>
       <div class="title">
@@ -517,14 +601,6 @@
 
     <!-- Shortcut Bar with Nav/Dev/Edit Modes -->
     <ShortcutBar onExecute={handleExecuteMacro} />
-  {:else if !isLandscape}
-    <!-- Floating restore bar in immersive mode (Portrait only) -->
-    <div class="floating-topbar-pill">
-      <button class="pill-btn" onclick={() => (hideTopBar = false)}>▼ Show Bar</button>
-      <button class="pill-btn" onclick={toggleFullscreen}>{isFullscreen ? '⛶ Exit' : '⛶'}</button>
-      <button class="pill-btn" onclick={toggleTouchLock}>🔒 Lock</button>
-      <button class="pill-btn" onclick={() => (showSettings = true)}>⚙️</button>
-    </div>
   {/if}
 
   {#if isLandscape}
@@ -545,7 +621,10 @@
       />
 
       <section bind:this={viewportEl} class="viewport-container landscape-vp">
-        <div class="canvas-wrapper">
+        <div
+          class="canvas-wrapper"
+          style:transform="scale({zoomLevel}) translate({panX}px, {panY}px)"
+        >
           <div class="canvas-relative-container">
             <canvas
               bind:this={canvasEl}
@@ -608,7 +687,10 @@
   {:else}
     <!-- Portrait Layout -->
     <section bind:this={viewportEl} class="viewport-container portrait-vp">
-      <div class="canvas-wrapper">
+      <div
+        class="canvas-wrapper"
+        style:transform="scale({zoomLevel}) translate({panX}px, {panY}px)"
+      >
         <div class="canvas-relative-container">
           <canvas
             bind:this={canvasEl}
@@ -708,15 +790,6 @@
             >
               🔄 {isLandscape ? 'Switch to Portrait' : 'Force Landscape'}
             </button>
-            <button
-              class="setting-btn"
-              onclick={() => {
-                hideTopBar = true
-                showSettings = false
-              }}
-            >
-              ▲ Hide Bars (Immersive)
-            </button>
           </div>
         </div>
 
@@ -740,14 +813,6 @@
 
         <div class="setting-section">
           <h3>Diagnostics & Stats</h3>
-          <div class="btn-group">
-            <button
-              class="setting-btn {showDebug ? 'active' : ''}"
-              onclick={() => (showDebug = !showDebug)}
-            >
-              {showDebug ? 'Hide Live Stats' : 'Show Live Stats Overlay'}
-            </button>
-          </div>
           <div class="info-grid">
             <div><span class="muted">FPS:</span> <strong>{renderStats.fps}</strong></div>
             <div><span class="muted">RTT:</span> <strong>{rtt === null ? '—' : `${rtt} ms`}</strong></div>
@@ -776,30 +841,6 @@
         </div>
       </div>
     </div>
-  {/if}
-
-  {#if showDebug && !hideTopBar}
-    <section class="grid">
-      <div>
-        <span class="muted">FPS</span>
-        <strong>{renderStats.fps} fps</strong>
-      </div>
-      <div>
-        <span class="muted">Resolution</span>
-        <strong>{desktopRes[0]}×{desktopRes[1]}</strong>
-      </div>
-      <div>
-        <span class="muted">Cursor</span>
-        <strong>{cursorPos[0]}, {cursorPos[1]}</strong>
-      </div>
-    </section>
-
-    <section class="log">
-      <h3 class="muted">incoming packets</h3>
-      {#each log as p}
-        <div class="line mono">{p.name}</div>
-      {/each}
-    </section>
   {/if}
 
   <VoiceInputModal
@@ -855,11 +896,6 @@
     height: 100vh;
     padding: 0;
     gap: 0;
-  }
-  .session.immersive {
-    padding: 0;
-    gap: 0;
-    max-width: 100%;
   }
   header.clean-header {
     display: flex;
@@ -933,28 +969,6 @@
   .badge.closed {
     background: rgba(229, 62, 62, 0.15);
     color: var(--err);
-  }
-  .floating-topbar-pill {
-    position: absolute;
-    top: 6px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 100;
-    display: flex;
-    gap: 4px;
-    background: rgba(13, 16, 23, 0.85);
-    backdrop-filter: blur(8px);
-    padding: 3px 6px;
-    border-radius: 20px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-  }
-  .pill-btn {
-    background: #1c222d;
-    border: 1px solid #2d3748;
-    border-radius: 12px;
-    color: var(--text);
-    white-space: nowrap;
   }
   .detail {
     margin: 0;
@@ -1100,43 +1114,6 @@
     right: 150px;
     z-index: 20;
     box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.7);
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-    gap: 6px;
-    flex-shrink: 0;
-  }
-  .grid > div {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 6px 10px;
-    display: flex;
-    flex-direction: column;
-  }
-  .grid span {
-    font-size: 11px;
-  }
-  .log {
-    height: 100px;
-    overflow-y: auto;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 6px 10px;
-    flex-shrink: 0;
-  }
-  .log h3 {
-    margin: 0 0 4px;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-  .line {
-    font-size: 11px;
-    padding: 1px 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   }
   .keyboard-container {
     flex-shrink: 0;
