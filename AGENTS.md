@@ -63,6 +63,15 @@ xpra shadow --bind-ws=0.0.0.0:10000 :0     # shadows the running desktop, passwo
 
 ## Gotchas (each cost real debugging time)
 
+- **Desktop mode + keyboard grab** (Session.svelte): screens ≥1024px with
+  `pointer: fine` get a chrome-less layout (whole window = remote screen, no
+  keyboards/panels). Full key grab needs fullscreen + `navigator.keyboard.lock()`
+  (Chrome/Edge only, TS 6 lib.dom does NOT type it — local cast in
+  `getKeyboardApi()`). Without the lock API, Esc is not interceptable: native
+  browser exits fullscreen. Quit gestures: `Esc Esc` (double, 450ms) or the ✕
+  chip; ⛶ chip toggles fullscreen. `window blur` releases stuck remote
+  modifiers (Control/Alt/Shift/Meta) — a locked Alt+Tab would otherwise leave
+  Alt "held down" on the remote.
 - **Bencode is not standard bencode.** xpra distinguishes `bytes` from `str`:
   latin-1-only strings encode as plain `<len>:<bytes>`, others as `u<len>:<utf8>`.
   On decode, byte-strings MUST stay `Uint8Array` (HMAC salts are raw bytes —

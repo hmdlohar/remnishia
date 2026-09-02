@@ -30,6 +30,56 @@
   let isFullscreen = $state(false)
   let isTouchLocked = $state(false)
 
+  // Desktop mode: large screen with a real mouse → whole window is the remote
+  // screen, no on-screen keyboards/buttons. Fullscreen + keyboard lock grabs
+  // all keys (Super/Ctrl/Alt/...) and sends them to the remote host.
+  let isDesktop = $state(false)
+  let kbLocked = $state(false)
+  let hintVisible = $state(false)
+  let lastEscTime = 0
+
+  interface KeyboardLockApi {
+    lock(keys?: string[]): Promise<void>
+    unlock(): void
+  }
+  function getKeyboardApi(): KeyboardLockApi | null {
+    const k = (navigator as Navigator & { keyboard?: Partial<KeyboardLockApi> }).keyboard
+    return k && typeof k.lock === 'function' ? (k as KeyboardLockApi) : null
+  }
+
+  async function enterGrab() {
+    if (!document.fullscreenElement) {
+      try {
+        await document.documentElement.requestFullscreen()
+      } catch {
+        return
+      }
+    }
+    const k = getKeyboardApi()
+    if (k) {
+      try {
+        await k.lock()
+        kbLocked = true
+      } catch {
+        kbLocked = false
+      }
+    }
+  }
+
+  function exitFullscreenOnly() {
+    document.exitFullscreen().catch(() => {})
+  }
+
+  function leaveSession() {
+    const k = getKeyboardApi()
+    k?.unlock()
+    kbLocked = false
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {})
+    }
+    navigate('#/')
+  }
+
   function toggleTouchLock() {
     isTouchLocked = !isTouchLocked
   }
@@ -106,11 +156,47 @@
     updateCursorScreen()
   })
 
+  $effect(() => {
+    // Desktop: remind how to grab / quit while running windowed
+    if (isDesktop && status === 'connected' && !isFullscreen) {
+      hintVisible = true
+      const t = window.setTimeout(() => (hintVisible = false), 9000)
+      return () => window.clearTimeout(t)
+    }
+    hintVisible = false
+  })
+
   function checkOrientation() {
     if (typeof window !== 'undefined') {
       const physicalLandscape = window.innerWidth > window.innerHeight && window.innerWidth > 600
       isLandscape = forceLandscape || physicalLandscape
     }
+  }
+
+  function checkDesktopMode() {
+    const mq = window.matchMedia('(min-width: 1024px) and (pointer: fine)')
+    isDesktop = mq.matches
+  }
+
+  // xpra button numbers: 1 left, 2 middle, 3 right, 4/5 wheel, 8/9 back/fwd
+  function xpraButton(b: number): number {
+    if (b === 0) return 1
+    if (b === 1) return 2
+    if (b === 2) return 3
+    if (b === 3) return 8
+    if (b === 4) return 9
+    return 1
+  }
+
+  function releaseStuckModifiers() {
+    if (!client || status !== 'connected') return
+    const mods: Array<[string, number]> = [
+      ['Control_L', 0xffe5],
+      ['Alt_L', 0xffe9],
+      ['Shift_L', 0xffe1],
+      ['Meta_L', 0xffe7],
+    ]
+    for (const [kn, kv] of mods) client.sendKeyAction(kn, false, [], kv, '')
   }
 
   async function toggleForceLandscape() {
@@ -186,9 +272,11 @@
     }
 
     if (mouseMode === 'direct' || e.pointerType === 'mouse') {
+      // Stop the browser's Back/Forward history navigation on XButtons
+      if (e.button === 3 || e.button === 4) e.preventDefault()
       const [x, y] = getCanvasCoords(e)
       cursorPos = [x, y]
-      const btn = e.button === 0 ? 1 : e.button === 1 ? 2 : e.button === 2 ? 3 : 1
+      const btn = xpraButton(e.button)
       isMouseDown = true
       client.sendPointerPosition(x, y)
       client.sendButtonAction(btn, true, x, y, [], [btn])
@@ -315,9 +403,10 @@
     }
 
     if (mouseMode === 'direct' || e.pointerType === 'mouse') {
+      if (e.button === 3 || e.button === 4) e.preventDefault()
       const [x, y] = getCanvasCoords(e)
       cursorPos = [x, y]
-      const btn = e.button === 0 ? 1 : e.button === 1 ? 2 : e.button === 2 ? 3 : 1
+      const btn = xpraButton(e.button)
       isMouseDown = false
       client.sendButtonAction(btn, false, x, y)
     } else {
@@ -435,6 +524,23 @@
   }
 
   function handleWindowKeyDown(e: KeyboardEvent) {
+    // Desktop grab: double-Esc within 450ms leaves the session; single Esc is
+    // forwarded to the remote (keyboard.lock delivers Esc while fullscreen).
+    if (isDesktop && e.key === 'Escape') {
+      const now = performance.now()
+      if (now - lastEscTime < 450) {
+        e.preventDefault()
+        leaveSession()
+        return
+      }
+      lastEscTime = now
+      if (document.fullscreenElement && !kbLocked) {
+        // No keyboard-lock API (e.g. Firefox): native Esc already exited fs.
+        e.preventDefault()
+        exitFullscreenOnly()
+        return
+      }
+    }
     if (status !== 'connected' || !client) return
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
     e.preventDefault()
@@ -467,13 +573,29 @@
     }
 
     checkOrientation()
+    checkDesktopMode()
     window.addEventListener('resize', checkOrientation)
+
+    const desktopMq = window.matchMedia('(min-width: 1024px) and (pointer: fine)')
+    const onDesktopChange = () => {
+      checkDesktopMode()
+      setTimeout(updateCursorScreen, 50)
+    }
+    desktopMq.addEventListener('change', onDesktopChange)
 
     const onFullscreenChange = () => {
       isFullscreen = Boolean(document.fullscreenElement)
+      if (!isFullscreen) {
+        const k = getKeyboardApi()
+        k?.unlock()
+        kbLocked = false
+      }
       setTimeout(updateCursorScreen, 100)
     }
     document.addEventListener('fullscreenchange', onFullscreenChange)
+
+    const onBlur = () => releaseStuckModifiers()
+    window.addEventListener('blur', onBlur)
 
     renderer = new XpraRenderer()
     renderer.onStats = (s) => (renderStats = s)
@@ -533,7 +655,7 @@
       password: conn.password,
       ssl: conn.ssl,
       path: conn.path,
-      desktopSize: desktopRes,
+      desktopSize: isDesktop ? [window.innerWidth, window.innerHeight] : desktopRes,
       quality: conn.quality ?? 'balanced',
     })
 
@@ -546,7 +668,9 @@
 
     return () => {
       unsubPwa()
+      desktopMq.removeEventListener('change', onDesktopChange)
       document.removeEventListener('fullscreenchange', onFullscreenChange)
+      window.removeEventListener('blur', onBlur)
       window.removeEventListener('resize', checkOrientation)
       window.removeEventListener('keydown', handleWindowKeyDown)
       window.removeEventListener('keyup', handleWindowKeyUp)
@@ -566,8 +690,8 @@
   )
 </script>
 
-<main class="session {isLandscape ? 'landscape' : 'portrait'}">
-  {#if !isLandscape}
+<main class="session {isDesktop ? 'desktop' : isLandscape ? 'landscape' : 'portrait'}">
+  {#if !isLandscape && !isDesktop}
     <header class="clean-header">
       <button class="icon" aria-label="Back" onclick={() => navigate('#/')}>‹</button>
       <div class="title">
@@ -603,7 +727,54 @@
     <ShortcutBar onExecute={handleExecuteMacro} />
   {/if}
 
-  {#if isLandscape}
+  {#if isDesktop}
+    <!-- Desktop Layout: the whole window IS the remote screen. No keyboards,
+         no bars. Fullscreen + keyboard lock grabs every key for the remote. -->
+    <section bind:this={viewportEl} class="viewport-container desktop-vp">
+      <div
+        class="canvas-wrapper"
+        style:transform="scale({zoomLevel}) translate({panX}px, {panY}px)"
+      >
+        <div class="canvas-relative-container">
+          <canvas
+            bind:this={canvasEl}
+            class="remote-canvas"
+            style:cursor={activeCursor?.dataUrl ? `url("${activeCursor.dataUrl}") ${activeCursor.xhot} ${activeCursor.yhot}, auto` : 'default'}
+            onpointerdown={handlePointerDown}
+            onpointermove={handlePointerMove}
+            onpointerup={handlePointerUp}
+            onpointercancel={handlePointerUp}
+            onwheel={handleWheel}
+            oncontextmenu={(e) => e.preventDefault()}
+            onauxclick={(e) => e.preventDefault()}
+          ></canvas>
+        </div>
+      </div>
+
+      {#if status !== 'connected'}
+        <div class="overlay">
+          <span class="muted">{status === 'connecting' ? 'Connecting to Xpra…' : status === 'authenticating' ? 'Authenticating…' : detail || status}</span>
+        </div>
+      {/if}
+
+      {#if hintVisible}
+        <div class="hint-pill">
+          <strong>⛶</strong> fullscreen grabs all keys (Super, Alt-Tab…) · <strong>Esc Esc</strong> quits
+        </div>
+      {/if}
+
+      <div class="desktop-chips">
+        <button
+          class="chip"
+          title={isFullscreen ? 'Leave fullscreen' : 'Fullscreen + keyboard grab'}
+          onclick={isFullscreen ? exitFullscreenOnly : enterGrab}
+        >
+          ⛶
+        </button>
+        <button class="chip danger" title="Disconnect" onclick={leaveSession}>✕</button>
+      </div>
+    </section>
+  {:else if isLandscape}
     <!-- Landscape 3-Column Split Layout: Left Keyboard | Center Screen (100% Height) | Right Keyboard -->
     <div class="landscape-split">
       <LandscapeLeft
@@ -1010,6 +1181,73 @@
   .landscape-vp {
     flex: 1;
     min-height: 0;
+  }
+  .session.desktop {
+    max-width: 100%;
+    width: 100vw;
+    height: 100dvh;
+    padding: 0;
+    gap: 0;
+  }
+  .desktop-vp {
+    flex: 1;
+    min-height: 0;
+    border-radius: 0;
+  }
+  .desktop-chips {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    display: flex;
+    gap: 6px;
+    z-index: 30;
+    opacity: 0.3;
+    transition: opacity 0.2s;
+  }
+  .desktop-chips:hover,
+  .desktop-chips:focus-within {
+    opacity: 1;
+  }
+  .chip {
+    width: 34px;
+    height: 30px;
+    padding: 0;
+    font-size: 14px;
+    background: rgba(28, 34, 45, 0.85);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+  .chip:hover {
+    background: #2b6cb0;
+    border-color: #63b3ed;
+    color: #fff;
+  }
+  .chip.danger:hover {
+    background: #9b2c2c;
+    border-color: #fc8181;
+  }
+  .hint-pill {
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 30;
+    padding: 6px 14px;
+    border-radius: 999px;
+    background: rgba(21, 25, 33, 0.9);
+    border: 1px solid var(--border);
+    color: #cbd5e0;
+    font-size: 12px;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  .hint-pill strong {
+    color: #90cdf4;
   }
   .canvas-wrapper {
     display: flex;
